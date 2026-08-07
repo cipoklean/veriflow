@@ -1,0 +1,19 @@
+# Compiler files
+cache/
+out/
+
+# Commonly ignored directories
+.logs/
+.ignore/
+
+# Deployment broadcast logs — ignore ALL chains (includes 10143 mainnet-test
+# deployments; the cache/ dir can contain private keys in run-latest.json).
+broadcast/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+.env.*
+!.env.example
