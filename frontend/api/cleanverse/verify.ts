@@ -68,17 +68,13 @@ function decryptJson(envelope: { data: string }): any {
 }
 
 async function generateApass(address: string, customerId: string): Promise<any> {
-  // 10-year expiration (seconds). Cleanverse validates an expiration param;
-  // hedge the likely field names since the request is encrypted and the exact
-  // schema is undocumented. The server ignores unknown keys, so sending several
-  // is safe and lets us learn the correct one from the next error.
+  // 10-year expiration (seconds). Cleanverse requires an `expiration` param on
+  // /generate_apass (validated server-side); the name is `expiration` (top-level).
   const exp = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
   const payload = encryptJson({
     customerId,
-    wallet: { address, chain: 'monad', expiration: exp },
+    wallet: { address, chain: 'monad' },
     expiration: exp,
-    expiry: exp,
-    expirationTime: exp,
   });
   const res = await fetch(`${BASE}/generate_apass`, {
     method: 'POST',
