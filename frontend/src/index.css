@@ -51,8 +51,8 @@
   --color-warning-light: rgba(56, 189, 248, 0.12);
 
   --font-mono: "JetBrains Mono", "Fira Code", monospace;
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-sans: "Outfit", system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", "Outfit", system-ui, sans-serif;
 
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-spin-slow: spin 2s linear infinite;
@@ -305,6 +305,40 @@
     transition: all 0.2s;
   }
   .input::placeholder { color: var(--color-text-muted); }
+  /* ─── Premium nav active state: brand-gradient pill + soft glow ─── */
+  .nav-active {
+    color: #FFFFFF;
+    background-image: linear-gradient(90deg, #0EA5E9, #14B8A6 50%, #22C55E);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.30),
+      0 2px 14px rgba(45, 212, 191, 0.40),
+      0 0 30px rgba(34, 211, 238, 0.18);
+  }
+  .nav-active:hover {
+    color: #FFFFFF;
+    background-image: linear-gradient(90deg, #0EA5E9, #14B8A6 50%, #22C55E);
+  }
+  /* Inactive nav hover: subtle lift + teal tint (depth cue) */
+  .group:hover .nav-inactive {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  /* ─── Reveal: scroll-in primitive (framer-motion drives transform; this is a
+     no-JS fallback so content is never hidden if motion fails) ─── */
+  .reveal {
+    will-change: transform, opacity;
+  }
+
+  /* ─── Section rhythm: cinematic chapters, never cramped (gpt-taste spacing) ─── */
+  .section-rhythm > * + * {
+    margin-top: 2rem;
+  }
+  @media (min-width: 768px) {
+    .section-rhythm > * + * {
+      margin-top: 3rem;
+    }
+  }
+
   .input:focus {
     outline: none;
     border-color: rgba(45, 212, 191, 0.50);

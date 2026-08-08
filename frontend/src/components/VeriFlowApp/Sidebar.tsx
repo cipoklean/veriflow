@@ -74,10 +74,12 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onCloseMobile }: Side
 
   const header = (
     <div className="flex items-center justify-between h-16 px-4 border-b border-border-subtle">
-      <Link to="/" className="flex items-center gap-2.5 min-w-0" onClick={onCloseMobile}>
-        <img src={logo} alt="VeriFlow" className="h-9 w-9 flex-shrink-0 rounded-lg" />
+      <Link to="/" className="flex items-center gap-2.5 min-w-0 group" onClick={onCloseMobile}>
+        <span className="relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent-cyan/15 to-accent-green/15 ring-1 ring-white/10 transition-transform duration-300 group-hover:scale-105">
+          <img src={logo} alt="VeriFlow" className="h-7 w-7 rounded-lg" />
+        </span>
         {!collapsed && (
-          <span className="font-extrabold text-xl text-text-primary tracking-tight truncate">
+          <span className="bg-gradient-to-r from-white via-white to-accent-teal/80 bg-clip-text font-extrabold text-xl tracking-tight text-transparent truncate">
             VeriFlow
           </span>
         )}
@@ -142,9 +144,13 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onCloseMobile }: Side
           )}
         >
           <div className="flex items-center justify-between h-16 px-4 border-b border-border-subtle">
-            <Link to="/" className="flex items-center gap-2.5" onClick={onCloseMobile}>
-              <img src={logo} alt="VeriFlow" className="h-9 w-9 rounded-lg" />
-              <span className="font-extrabold text-xl text-text-primary tracking-tight">VeriFlow</span>
+            <Link to="/" className="flex items-center gap-2.5 group" onClick={onCloseMobile}>
+              <span className="relative flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent-cyan/15 to-accent-green/15 ring-1 ring-white/10">
+                <img src={logo} alt="VeriFlow" className="h-7 w-7 rounded-lg" />
+              </span>
+              <span className="bg-gradient-to-r from-white via-white to-accent-teal/80 bg-clip-text font-extrabold text-xl tracking-tight text-transparent">
+                VeriFlow
+              </span>
             </Link>
             <button
               onClick={onCloseMobile}

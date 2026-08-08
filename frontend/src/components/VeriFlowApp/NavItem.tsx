@@ -19,11 +19,11 @@ export function NavItem({ name, href, icon: Icon, collapsed, end }: NavItemProps
       end={end}
       className={({ isActive }) =>
         cn(
-          'group relative flex items-center gap-3 rounded-full px-3.5 py-2.5 outline-none transition-colors duration-200',
+          'group relative flex items-center gap-3 rounded-full px-3.5 py-2.5 outline-none transition-all duration-200',
           collapsed && 'justify-center px-0',
           isActive
             ? 'nav-active'
-            : 'text-text-secondary hover:bg-white/5 hover:text-text-primary'
+            : 'nav-inactive text-text-secondary hover:bg-white/5 hover:text-text-primary'
         )
       }
     >

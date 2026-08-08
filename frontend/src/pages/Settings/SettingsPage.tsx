@@ -11,6 +11,7 @@ import CVIRegistryAbi from '@/contracts/abis/CVIRegistry.json';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { useToast } from '@/hooks/useToast';
 import { useTxDock } from '@/components/ui/TxDock';
+import { Reveal } from '@/components/ui/Reveal';
 import { ActionButton } from '@/components/ui/ActionButton';
 import { verifyStream, fetchCleanverseStatus, type VerifyStep } from '@/lib/cleanverse';
 
@@ -229,7 +230,8 @@ export function SettingsPage() {
   );
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <Reveal>
+      <div className="mx-auto max-w-2xl space-y-8">
       {/* Cleanverse Identity — onboarding / verification */}
       <section className="card-hover" aria-label="Cleanverse identity">
         <div className="mb-4 flex items-center gap-3 border-b border-border-subtle pb-4">
@@ -503,5 +505,6 @@ export function SettingsPage() {
         transactions are verified on-chain for regulatory compliance.
       </p>
     </div>
+    </Reveal>
   );
 }

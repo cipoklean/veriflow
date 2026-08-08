@@ -1,6 +1,7 @@
 import { DollarSign, Layers, Fingerprint, Shield, TrendingUp, Activity } from 'lucide-react';
 import { cn, formatNumber, formatCurrency } from '@/lib/utils';
 import { useProtocolStats, useAllPools, useVerifiedAssets } from '@/contracts/useVeriFlow';
+import { Reveal } from '@/components/ui/Reveal';
 
 export function AnalyticsPage() {
   // FE-02: analytics are public chain data — no wallet gate.
@@ -13,7 +14,8 @@ export function AnalyticsPage() {
   const loading = statsLoading || poolsLoading || assetsLoading;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <Reveal>
+      <div className="mx-auto max-w-7xl space-y-8 lg:space-y-10">
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
@@ -157,6 +159,7 @@ export function AnalyticsPage() {
         </>
       )}
     </div>
+    </Reveal>
   );
 }
 

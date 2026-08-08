@@ -13,6 +13,7 @@ import VeriRouterAbi from '@/contracts/abis/VeriRouter.json';
 import VeriFactoryAbi from '@/contracts/abis/VeriFactory.json';
 import VeriPairAbi from '@/contracts/abis/VeriPair.json';
 import { Modal } from '@/components/ui/Modal';
+import { Reveal } from '@/components/ui/Reveal';
 import { TokenIcon } from '@/components/ui/TokenIcon';
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -523,7 +524,8 @@ export function LiquidityPage() {
   const isFirstLiquidity = !!poolInfo && poolInfo.totalSupply === 0n;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <Reveal>
+      <div className="mx-auto max-w-3xl space-y-6 lg:space-y-8">
       {/* Tab Navigation */}
       <div className="flex rounded-2xl border border-white/10 bg-bg-surface p-1" role="tablist" aria-label="Liquidity mode">
         <button
@@ -896,5 +898,6 @@ export function LiquidityPage() {
         </div>
       </Modal>
     </div>
+    </Reveal>
   );
 }

@@ -7,6 +7,7 @@ import { useProtocolStats, useAllPools, useSupportedTokens, tokenMetaByAddress, 
 import { HeroCard } from '@/components/VeriFlowApp/HeroCard';
 import { StatCard } from '@/components/ui/StatCard';
 import { Card } from '@/components/ui/Card';
+import { Reveal } from '@/components/ui/Reveal';
 import { Wave } from '@/components/ui/Wave';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useCountUp, useTickingNumber } from '@/lib/motion';
@@ -94,24 +95,27 @@ export function DashboardPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="mx-auto max-w-7xl space-y-10 lg:space-y-12">
       {/* Bento row 1: hero (2 cols) + 2 stat cards */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-        <div className="lg:col-span-2">
-          <HeroCard />
+      <Reveal>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4 lg:grid-flow-dense">
+          <div className="lg:col-span-2">
+            <HeroCard />
+          </div>
+          <Tooltip content={stats[0].tip} placement="top">
+            <span className="block h-full cursor-help"><StatCard {...stats[0]} /></span>
+          </Tooltip>
+          <Tooltip content={stats[1].tip} placement="top">
+            <span className="block h-full cursor-help"><StatCard {...stats[1]} /></span>
+          </Tooltip>
         </div>
-        <Tooltip content={stats[0].tip} placement="top">
-          <span className="block h-full cursor-help"><StatCard {...stats[0]} /></span>
-        </Tooltip>
-        <Tooltip content={stats[1].tip} placement="top">
-          <span className="block h-full cursor-help"><StatCard {...stats[1]} /></span>
-        </Tooltip>
-      </div>
+      </Reveal>
 
       {/* Bento row 2: trades feed (2 cols) + 2 stat cards */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-        <div className="lg:col-span-2">
-          <Card className="h-full">
+      <Reveal delay={0.06}>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4 lg:grid-flow-dense">
+          <div className="lg:col-span-2">
+            <Card className="h-full">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="font-display text-lg font-semibold text-text-primary">
                 Recent verified trades
@@ -201,9 +205,11 @@ export function DashboardPage() {
           <span className="block h-full cursor-help"><StatCard {...stats[3]} /></span>
         </Tooltip>
       </div>
+      </Reveal>
 
       {/* Bento row 3: top pools mini-table */}
-      <Card className="p-0">
+      <Reveal delay={0.12}>
+        <Card className="p-0">
         <div className="flex items-center justify-between px-6 pt-5">
           <h2 className="font-display text-lg font-semibold text-text-primary">Top pools</h2>
           <span className="text-xs uppercase tracking-wider text-text-muted">Live reserves</span>
@@ -271,6 +277,7 @@ export function DashboardPage() {
           </span>
         </div>
       </Card>
+      </Reveal>
     </div>
   );
 }

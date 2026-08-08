@@ -29,7 +29,7 @@ export function TokenIcon({ symbol, size = 'md', className }: TokenIconProps) {
   return (
     <span
       className={cn(
-        'inline-flex flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br font-bold',
+        'inline-flex flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br font-bold transition-transform duration-300 group-hover:scale-110',
         sizeMap[size],
         chips[hue],
         className

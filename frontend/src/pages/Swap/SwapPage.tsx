@@ -13,6 +13,7 @@ import { getContractAddresses } from '@/contracts/config';
 import { useSupportedTokens, useQuote, useWalletVerified, decodeRevertReason, resolveSwapPath, useAllPools } from '@/contracts/useVeriFlow';
 import VeriRouterAbi from '@/contracts/abis/VeriRouter.json';
 import { Modal } from '@/components/ui/Modal';
+import { Reveal } from '@/components/ui/Reveal';
 import { TokenIcon } from '@/components/ui/TokenIcon';
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -465,7 +466,8 @@ export function SwapPage() {
   const showUnverifiedBanner = isConnected && !isVerified && !isVerifying;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <Reveal>
+      <div className="mx-auto max-w-3xl space-y-6 lg:space-y-8">
       {showUnverifiedBanner && (
         <div className="flex items-center justify-between gap-4 rounded-2xl border border-warning-primary/40 bg-warning-light/10 p-4">
           <div className="flex items-center gap-3">
@@ -986,5 +988,6 @@ export function SwapPage() {
         </div>
       </Modal>
     </div>
+    </Reveal>
   );
 }

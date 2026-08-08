@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, Loader2, Zap, TrendingUp, DollarSign, Shield, P
 import { cn, formatNumber, formatAddress, formatCurrency } from '@/lib/utils';
 import { useAllPools, useSupportedTokens, tokenMetaByAddress } from '@/contracts/useVeriFlow';
 import { TokenIcon } from '@/components/ui/TokenIcon';
+import { Reveal } from '@/components/ui/Reveal';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 interface Pool {
@@ -99,7 +100,8 @@ export function PoolsPage() {
   // Manage) still route to /liquidity where the wallet gate applies.
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <Reveal>
+      <div className="mx-auto max-w-7xl space-y-8 lg:space-y-10">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -208,5 +210,6 @@ export function PoolsPage() {
         </div>
       </div>
     </div>
+    </Reveal>
   );
 }
