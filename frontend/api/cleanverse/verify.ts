@@ -68,14 +68,14 @@ function decryptJson(envelope: { data: string }): any {
 }
 
 async function generateApass(address: string, customerId: string): Promise<any> {
-  // 10-year expiration (seconds). Cleanverse requires `expirationTime` on
-  // /generate_apass — the field name matches the `expirationTime` returned by
-  // /query_apass (confirmed against the live response schema).
-  const exp = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
+  // expirationTime: required long, Unix SECONDS (~1 year out), plain number —
+  // NOT a string, NOT milliseconds. Confirmed against the live 0002 error.
+  const expirationTime = Math.floor(Date.now() / 1000) + 365 * 24 * 3600;
   const payload = encryptJson({
     customerId,
+    expirationTime,
     wallet: { address, chain: 'monad' },
-    expirationTime: exp,
+    override: false,
   });
   const res = await fetch(`${BASE}/generate_apass`, {
     method: 'POST',
