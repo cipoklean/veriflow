@@ -6,6 +6,7 @@ import { readContract, writeContract as writeContractAction } from 'wagmi/action
 import { parseUnits, formatUnits, erc20Abi, type Address } from 'viem';
 import { ArrowRightLeft, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, ShieldCheck, Fingerprint, BadgeCheck, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { fmt, pctOfBalance } from '@/lib/format';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
@@ -210,6 +211,15 @@ export function SwapPage() {
 
   const handleToAmountChange = (value: string) => {
     setToAmount(value);
+  };
+
+  // Normalize a typed amount to <=6 decimals, stripping trailing zeros, on blur.
+  // Keeps the input clean without fighting the user mid-keystroke.
+  const normalizeAmount = (raw: string): string => {
+    if (!raw) return raw;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return raw;
+    return n.toFixed(6).replace(/\.?0+$/, '');
   };
 
   // Swap tokens
@@ -454,19 +464,11 @@ export function SwapPage() {
     : Number.POSITIVE_INFINITY; // no pool → cap is the wallet itself
   const maxSwappable = Math.min(walletBalanceNum, liquidityCapNum);
 
-  // Trim a number to <=6 decimals, stripping trailing zeros (e.g. 25% of
-  // 4.6330 → "1.158257", never "1.158257538400000008"). Used for quick-size
-  // chip fills so the input shows clean values.
-  function trimSix(n: number): string {
-    if (!Number.isFinite(n) || n <= 0) return '0';
-    const s = n.toFixed(6);
-    return s.replace(/\.?0+$/, '');
-  }
-  // MAX chip value: native MON keeps a 0.01 gas buffer so a MAX click can never
-  // fail on gas; ERC20 uses the full balance.
-  const maxChipValue = fromToken.isNative
-    ? Math.max(0, walletBalanceNum - 0.01)
-    : walletBalanceNum;
+  // Raw wallet balance (bigint) for bigint chip math (no float artifacts).
+  const walletBalanceWei = parseUnits(
+    fromToken.isNative ? walletBalanceNum.toString() : fromBalanceFormatted || '0',
+    18,
+  );
   const hasNoBalance = walletBalanceNum <= 0;
   // INSUFFICIENT BALANCE: amountIn formatted vs wallet balance formatted.
   const amountInNum = fromAmount ? safeBalance(fromAmount) : 0;
@@ -528,43 +530,36 @@ export function SwapPage() {
                 type="text"
                 value={fromAmount}
                 onChange={e => handleFromAmountChange(e.target.value)}
+                onBlur={e => setFromAmount(normalizeAmount(e.target.value))}
                 placeholder="0.0"
                 className="input w-full border-0 bg-transparent text-right font-mono text-2xl focus:ring-0 placeholder:text-text-muted"
                 inputMode="decimal"
                 aria-label="Amount to pay"
               />
             </div>
-            {/* QUICK-SIZE CHIPS: faucet-scale presets. 10/25/50% of wallet balance
-                (capped to what the pool can absorb), plus MAX. Chip amounts use
-                bigint math (parseUnits * pct / 100) to avoid raw float artifacts,
-                then trimmed to 6 decimals with trailing zeros stripped. */}
+            {/* QUICK-SIZE CHIPS: 10/25/50% of wallet balance (capped to what the
+                pool can absorb), plus MAX. Amounts computed with bigint math via
+                pctOfBalance() (no float artifacts), formatted with fmt(). */}
             <div className="mt-3 flex items-center gap-2">
-              {[0.1, 0.25, 0.5].map(pct => {
-                // Bigint-safe: parseUnits(balance,18) * pctN / 100n, trimmed to 6dp.
-                const balWei = parseUnits(
-                  (fromToken.isNative ? walletBalanceNum.toString() : fromBalanceFormatted || '0'),
-                  18,
-                );
-                const pctN = BigInt(Math.round(pct * 100));
-                const presetWei = (balWei * pctN) / 100n;
-                const preset = Number(formatUnits(presetWei, 18));
-                const capped = Math.min(preset, maxSwappable);
+              {[10, 25, 50].map(pct => {
+                const presetWei = pctOfBalance(walletBalanceWei, pct as 10 | 25 | 50, fromToken.isNative);
+                const capped = Math.min(Number(formatUnits(presetWei, 18)), maxSwappable);
                 const disabled = hasNoBalance || isSameAsset || capped <= 0;
                 return (
                   <button
                     key={pct}
-                    onClick={() => handleFromAmountChange(trimSix(capped))}
+                    onClick={() => handleFromAmountChange(fmt(presetWei, 18))}
                     disabled={disabled}
                     className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {pct * 100}%
+                    {pct}%
                   </button>
                 );
               })}
-              {/* MAX: native MON leaves 0.01 gas buffer so a MAX click can never
-                  fail on gas; tokens use full balance. Trimmed to 6dp. */}
+              {/* MAX: native MON leaves a 0.01 gas buffer (pctOfBalance handles it)
+                  so a MAX click can never fail on gas; tokens use full balance. */}
               <button
-                onClick={() => handleFromAmountChange(trimSix(maxChipValue))}
+                onClick={() => handleFromAmountChange(fmt(pctOfBalance(walletBalanceWei, 100, fromToken.isNative), 18))}
                 disabled={hasNoBalance || isSameAsset}
                 className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -577,13 +572,13 @@ export function SwapPage() {
               </span>
               <div className="flex items-center gap-3">
                 {!fromToken.isNative && (
-                  <Tooltip content={hasNoBalance ? `No ${fromToken.symbol} balance` : `Max you can swap: ${maxSwappable.toFixed(4)} ${fromToken.symbol} (min of wallet balance and pool liquidity)`} placement="top" disabled={hasNoBalance}>
+                  <Tooltip content={hasNoBalance ? `No ${fromToken.symbol} balance` : `Max you can swap: ${fmt(parseUnits(maxSwappable.toString(), 18), 18)} ${fromToken.symbol} (min of wallet balance and pool liquidity)`} placement="top" disabled={hasNoBalance}>
                     <button
-                      onClick={() => handleFromAmountChange(maxSwappable.toFixed(fromToken.decimals))}
+                      onClick={() => handleFromAmountChange(fmt(parseUnits(maxSwappable.toString(), 18), 18))}
                       disabled={hasNoBalance || isSameAsset}
                       className="text-xs font-medium text-accent-teal transition-colors hover:text-accent-green disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Max: {maxSwappable.toFixed(4)} {fromToken.symbol}
+                      Max: {fmt(parseUnits(maxSwappable.toString(), 18), 18)} {fromToken.symbol}
                     </button>
                   </Tooltip>
                 )}

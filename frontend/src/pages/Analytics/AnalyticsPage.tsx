@@ -1,5 +1,6 @@
 import { DollarSign, Layers, Fingerprint, Shield, TrendingUp, Activity } from 'lucide-react';
 import { cn, formatNumber, formatCurrency } from '@/lib/utils';
+import { fmt } from '@/lib/format';
 import { useProtocolStats, useAllPools, useVerifiedAssets } from '@/contracts/useVeriFlow';
 import { Reveal } from '@/components/ui/Reveal';
 
@@ -101,13 +102,13 @@ export function AnalyticsPage() {
                           </div>
                         </td>
                         <td className="text-right font-mono text-text-primary">
-                          {formatNumber(Number(p.reserve0) / 10 ** (p.meta0?.decimals ?? 18))}
+                          {fmt(p.reserve0, p.meta0?.decimals ?? 18)} {p.meta0?.symbol}
                         </td>
                         <td className="text-right font-mono text-text-primary">
-                          {formatNumber(Number(p.reserve1) / 10 ** (p.meta1?.decimals ?? 18))}
+                          {fmt(p.reserve1, p.meta1?.decimals ?? 18)} {p.meta1?.symbol}
                         </td>
                         <td className="text-right font-mono text-text-secondary">
-                          {formatNumber(Number(p.totalSupply) / 1e18)}
+                          {fmt(p.totalSupply, 18)}
                         </td>
                         <td className="text-right font-mono text-accent-green">
                           {formatCurrency(

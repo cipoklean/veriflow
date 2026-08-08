@@ -7,6 +7,7 @@ import { cn, formatNumber } from '@/lib/utils';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
+import { fmt, pctOfBalance, pairAmount, minAmount } from '@/lib/format';
 import { getContractAddresses } from '@/contracts/config';
 import { useSupportedTokens, decodeRevertReason } from '@/contracts/useVeriFlow';
 import VeriRouterAbi from '@/contracts/abis/VeriRouter.json';
@@ -68,6 +69,7 @@ export function LiquidityPage() {
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
   const [slippage, setSlippage] = useState(0.5);
+  const [removePct, setRemovePct] = useState(100); // % of LP to remove
   const [showSlippageSettings, setShowSlippageSettings] = useState(false);
   const [poolInfo, setPoolInfo] = useState<PoolInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -175,10 +177,19 @@ export function LiquidityPage() {
   // (formatted to its decimals) — never a hardcoded value.
   const handleMaxA = () => {
     if (activeTab === 'add') {
-      setAmountA(formatUnits(tokenABalance, tokenA.decimals));
+      setAmountA(fmt(pctOfBalance(tokenABalance, 100, tokenA.isNative), tokenA.decimals));
     } else {
-      setAmountA(formatUnits(poolInfo?.userLiquidity ?? 0n, 18)); // LP tokens
+      setAmountA(fmt(pctOfBalance(poolInfo?.userLiquidity ?? 0n, 100, false), 18)); // LP tokens
     }
+  };
+
+  // Max B (add only): fill B to full balance, then back-compute A from reserves.
+  const handleMaxB = () => {
+    if (!poolInfo) return;
+    const bWei = pctOfBalance(tokenBBalance, 100, tokenB.isNative);
+    setAmountB(fmt(bWei, tokenB.decimals));
+    const aWei = pairAmount(bWei, poolInfo.reserve1, poolInfo.reserve0);
+    setAmountA(fmt(aWei, tokenA.decimals));
   };
 
   useEffect(() => {
@@ -218,20 +229,43 @@ export function LiquidityPage() {
     }
   }, [pairAddress, reservesData, lpTotalSupply, userLpBalance, tokenA, tokenB, pairToken0, pairToken1, tokenAAddr, tokenBAddr, isEmptyAddr]);
 
-  useEffect(() => {
-    if (poolInfo && amountA && parseFloat(amountA) > 0) {
-      const ratio = Number(poolInfo.reserve1) / Number(poolInfo.reserve0);
-      const amountBVal = parseFloat(amountA) * ratio;
-      setAmountB(amountBVal.toFixed(tokenB.decimals === 6 ? 2 : 4));
-    }
-  }, [amountA, poolInfo, tokenB]);
+  // Normalize a typed liquidity amount to <=6 decimals, stripping trailing
+  // zeros, on blur (mirrors the Swap input behavior).
+  const normalizeLiq = (raw: string, _decimals: number): string => {
+    if (!raw) return raw;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return raw;
+    return n.toFixed(6).replace(/\.?0+$/, '');
+  };
 
-  // Handle tab change
+  // A→B when A is edited, B→A when B is edited. Only re-fills the counterpart,
+  // preserving whatever the user typed on the active side.
+  useEffect(() => {
+    if (!poolInfo) return;
+    if (amountA && parseFloat(amountA) > 0) {
+      const aWei = parseUnits(amountA, tokenA.decimals);
+      setAmountB(fmt(pairAmount(aWei, poolInfo.reserve0, poolInfo.reserve1), tokenB.decimals));
+    } else if (amountB && parseFloat(amountB) > 0) {
+      const bWei = parseUnits(amountB, tokenB.decimals);
+      setAmountA(fmt(pairAmount(bWei, poolInfo.reserve1, poolInfo.reserve0), tokenA.decimals));
+    }
+  }, [amountA, amountB, poolInfo, tokenA.decimals, tokenB.decimals]);
+
+  // Remove tab: a percent slider drives the LP amount; derive it from the user's
+  // LP share via bigint (pctOfBalance) and surface est token0/token1.
+  useEffect(() => {
+    if (activeTab !== 'remove' || !poolInfo) return;
+    const lpWei = pctOfBalance(poolInfo.userLiquidity, removePct as 10 | 25 | 50 | 100, false);
+    setAmountA(fmt(lpWei, 18));
+  }, [activeTab, removePct, poolInfo]);
+
+
   const handleTabChange = (tab: 'add' | 'remove') => {
     setActiveTab(tab);
     setAmountA('');
     setAmountB('');
     setError(null);
+    setRemovePct(100);
   };
 
   const selectToken = (t: Token) => {
@@ -575,20 +609,20 @@ export function LiquidityPage() {
             <div>
               <div className="text-xs uppercase tracking-wider text-text-muted">Reserves</div>
               <div className="font-mono text-text-primary">
-                {formatNumber(Number(formatUnits(poolInfo.reserve0, poolInfo.token0.decimals)))} {poolInfo.token0.symbol}
+                {fmt(poolInfo.reserve0, poolInfo.token0.decimals)} {poolInfo.token0.symbol}
               </div>
               <div className="mt-1 font-mono text-text-primary">
-                {formatNumber(Number(formatUnits(poolInfo.reserve1, poolInfo.token1.decimals)))} {poolInfo.token1.symbol}
+                {fmt(poolInfo.reserve1, poolInfo.token1.decimals)} {poolInfo.token1.symbol}
               </div>
             </div>
             <div>
               <div className="text-xs uppercase tracking-wider text-text-muted">Total liquidity</div>
               <div className="font-mono text-text-primary">
-                {formatNumber(Number(formatUnits(poolInfo.totalSupply, 18)))} LP
+                {fmt(poolInfo.totalSupply, 18)} LP
               </div>
               {poolInfo.userLiquidity > 0n && (
                 <div className="mt-1 font-mono text-accent-teal">
-                  Your share: {formatNumber(Number(formatUnits(poolInfo.userLiquidity, 18)))} LP
+                  Your share: {fmt(poolInfo.userLiquidity, 18)} LP
                 </div>
               )}
             </div>
@@ -639,7 +673,7 @@ export function LiquidityPage() {
             />
             <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
               <span className="font-mono text-sm text-text-secondary">
-                Balance: {activeTab === 'add' ? formatNumber(Number(formatUnits(tokenABalance, tokenA.decimals))) : formatNumber(Number(formatUnits(poolInfo?.userLiquidity || 0n, 18)))} {activeTab === 'add' ? tokenA.symbol : 'LP'}
+                Balance: {activeTab === 'add' ? fmt(tokenABalance, tokenA.decimals) : fmt(poolInfo?.userLiquidity || 0n, 18)} {activeTab === 'add' ? tokenA.symbol : 'LP'}
               </span>
               <button
                 onClick={handleMaxA}
@@ -689,17 +723,24 @@ export function LiquidityPage() {
                 type="text"
                 value={amountB}
                 onChange={e => setAmountB(e.target.value)}
+                onBlur={e => setAmountB(normalizeLiq(e.target.value, tokenB.decimals))}
                 placeholder="0.0"
                 disabled={isLoading || isWriting || isConfirming || awaitingApproval}
                 className="input w-full border-0 bg-transparent text-right font-mono text-2xl focus:ring-0 placeholder:text-text-muted"
                 inputMode="decimal"
-                readOnly
                 aria-label="Token B amount"
               />
               <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
                 <span className="font-mono text-sm text-text-secondary">
-                  Balance: {formatNumber(Number(formatUnits(tokenBBalance, tokenB.decimals)))} {tokenB.symbol}
+                  Balance: {fmt(tokenBBalance, tokenB.decimals)} {tokenB.symbol}
                 </span>
+                <button
+                  onClick={handleMaxB}
+                  disabled={isLoading || isWriting || isConfirming || awaitingApproval || !poolInfo}
+                  className="text-xs font-medium text-accent-teal transition-colors hover:text-accent-green disabled:opacity-50"
+                >
+                  Max
+                </button>
               </div>
             </div>
           </div>
@@ -707,22 +748,36 @@ export function LiquidityPage() {
 
         {activeTab === 'remove' && poolInfo && (
           <div className="card border-border-subtle bg-bg-tertiary/50">
-            <div className="flex items-center gap-2 text-sm text-text-muted">
-              <Info className="h-4 w-4" />
-              <span>You will receive {poolInfo.token0.symbol} and {poolInfo.token1.symbol} proportional to your LP share.</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-text-muted">
+                <Info className="h-4 w-4" />
+                <span>You will receive {poolInfo.token0.symbol} and {poolInfo.token1.symbol} proportional to your LP share.</span>
+              </div>
+              <span className="font-mono text-sm text-text-secondary">{removePct}%</span>
             </div>
+            {/* Percent slider — drives the LP amount (see effect above) */}
+            <input
+              type="range"
+              min="1"
+              max="100"
+              step="1"
+              value={removePct}
+              onChange={e => setRemovePct(parseInt(e.target.value, 10))}
+              className="mt-3 w-full accent-accent-teal"
+              aria-label="Percentage of liquidity to remove"
+            />
             <div className="mt-3 grid grid-cols-2 gap-4">
               <div className="rounded-lg border border-border-subtle bg-bg-surface p-3 text-center">
                 <div className="font-mono text-text-primary">
-                  {formatNumber(Number(formatUnits(poolInfo.reserve0, poolInfo.token0.decimals)) * Number(formatUnits(poolInfo.userLiquidity || 0n, 18)) / Number(formatUnits(poolInfo.totalSupply, 18)))} {poolInfo.token0.symbol}
+                  {fmt(pairAmount(poolInfo.reserve0, poolInfo.totalSupply, pctOfBalance(poolInfo.userLiquidity, removePct as 10 | 25 | 50 | 100, false)), poolInfo.token0.decimals)} {poolInfo.token0.symbol}
                 </div>
-                <div className="text-xs text-text-muted">Est. {poolInfo.token0.symbol}</div>
+                <div className="text-xs text-text-muted">Est. {poolInfo.token0.symbol} · Min {fmt(minAmount(pairAmount(poolInfo.reserve0, poolInfo.totalSupply, pctOfBalance(poolInfo.userLiquidity, removePct as 10 | 25 | 50 | 100, false)), slippage), poolInfo.token0.decimals)}</div>
               </div>
               <div className="rounded-lg border border-border-subtle bg-bg-surface p-3 text-center">
                 <div className="font-mono text-text-primary">
-                  {formatNumber(Number(formatUnits(poolInfo.reserve1, poolInfo.token1.decimals)) * Number(formatUnits(poolInfo.userLiquidity || 0n, 18)) / Number(formatUnits(poolInfo.totalSupply, 18)))} {poolInfo.token1.symbol}
+                  {fmt(pairAmount(poolInfo.reserve1, poolInfo.totalSupply, pctOfBalance(poolInfo.userLiquidity, removePct as 10 | 25 | 50 | 100, false)), poolInfo.token1.decimals)} {poolInfo.token1.symbol}
                 </div>
-                <div className="text-xs text-text-muted">Est. {poolInfo.token1.symbol}</div>
+                <div className="text-xs text-text-muted">Est. {poolInfo.token1.symbol} · Min {fmt(minAmount(pairAmount(poolInfo.reserve1, poolInfo.totalSupply, pctOfBalance(poolInfo.userLiquidity, removePct as 10 | 25 | 50 | 100, false)), slippage), poolInfo.token1.decimals)}</div>
               </div>
             </div>
           </div>
@@ -783,7 +838,15 @@ export function LiquidityPage() {
             )}
           </div>
           <div className="font-mono text-sm text-text-secondary">
-            Min A: {amountA ? (parseFloat(amountA) * (1 - slippage / 100)).toFixed(4) : '-'} {tokenA.symbol}
+            {activeTab === 'add' ? (
+              <>
+                Min A: {amountA ? fmt(minAmount(parseUnits(amountA, tokenA.decimals), slippage), tokenA.decimals) : '-'} {tokenA.symbol}
+                {'  ·  '}
+                Min B: {amountB ? fmt(minAmount(parseUnits(amountB, tokenB.decimals), slippage), tokenB.decimals) : '-'} {tokenB.symbol}
+              </>
+            ) : (
+              <>Min A: {amountA ? fmt(minAmount(parseUnits(amountA, 18), slippage), 18) : '-'} LP</>
+            )}
           </div>
         </div>
       </div>

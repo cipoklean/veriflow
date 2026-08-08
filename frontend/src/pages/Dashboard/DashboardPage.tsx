@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Layers, ArrowLeftRight, Droplets, ShieldCheck } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { formatAddress, formatCurrency, formatNumber } from '@/lib/utils';
+import { formatAddress, formatCurrency } from '@/lib/utils';
+import { fmt } from '@/lib/format';
 import { formatUnits } from 'viem';
 import { useProtocolStats, useAllPools, useSupportedTokens, tokenMetaByAddress, usePairSwapEvents } from '@/contracts/useVeriFlow';
 import { HeroCard } from '@/components/VeriFlowApp/HeroCard';
@@ -151,10 +152,12 @@ export function DashboardPage() {
                   {events.map((ev, i) => {
                     const m0 = pools[0] ? tokenMetaByAddress(tokens, pools[0].token0) : undefined;
                     const m1 = pools[0] ? tokenMetaByAddress(tokens, pools[0].token1) : undefined;
-                    const in0 = m0 ? formatUnits(ev.amount0In, m0.decimals) : '0';
-                    const in1 = m1 ? formatUnits(ev.amount1In, m1.decimals) : '0';
-                    const out0 = m0 ? formatUnits(ev.amount0Out, m0.decimals) : '0';
-                    const out1 = m1 ? formatUnits(ev.amount1Out, m1.decimals) : '0';
+                    const d0 = m0?.decimals ?? 18;
+                    const d1 = m1?.decimals ?? 18;
+                    const in0 = ev.amount0In;
+                    const in1 = ev.amount1In;
+                    const out0 = ev.amount0Out;
+                    const out1 = ev.amount1Out;
                     const dir = Number(ev.amount0In) > 0 ? '0→1' : '1→0';
                     return (
                       <motion.li
@@ -188,7 +191,7 @@ export function DashboardPage() {
                           </Tooltip>
                         </div>
                         <span className="font-mono text-xs text-text-muted">
-                          {dir} · {formatNumber(Number(in0 || in1))} → {formatNumber(Number(out0 || out1))}
+                          {dir} · {fmt(in0 || in1, (in0 ? d0 : d1))} → {fmt(out0 || out1, (out0 ? d0 : d1))}
                         </span>
                       </motion.li>
                     );
@@ -239,7 +242,7 @@ export function DashboardPage() {
                   const m0 = tokenMetaByAddress(tokens, p.token0);
                   const m1 = tokenMetaByAddress(tokens, p.token1);
                   const r0 = m0 ? Number(formatUnits(p.reserve0, m0.decimals)) : 0;
-                  const r1 = m1 ? Number(formatUnits(p.reserve1, m1.decimals)) : 0;
+                  const r1 = m1 ? Number(formatUnits(p.reserve1, m1.decimals ? m1.decimals : 18)) : 0;
                   const tvlPool = r0 + r1;
                   return (
                     <tr key={p.address}>
@@ -258,7 +261,7 @@ export function DashboardPage() {
                       <td className="num text-text-primary">{formatCurrency(tvlPool)}</td>
                       <td className="num text-text-muted">—</td>
                       <td className="num text-text-secondary">
-                        {formatNumber(r0)} {m0?.symbol} / {formatNumber(r1)} {m1?.symbol}
+                        {fmt(p.reserve0, m0?.decimals ?? 18)} {m0?.symbol} / {fmt(p.reserve1, m1?.decimals ?? 18)} {m1?.symbol}
                       </td>
                     </tr>
                   );

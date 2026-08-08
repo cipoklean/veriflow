@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { formatUnits } from 'viem';
 import { motion } from 'framer-motion';
 import { ChevronDown, ChevronUp, Loader2, Zap, TrendingUp, DollarSign, Shield, Plus } from 'lucide-react';
-import { cn, formatNumber, formatAddress, formatCurrency } from '@/lib/utils';
+import { cn, formatAddress, formatCurrency, formatNumber } from '@/lib/utils';
+import { fmt } from '@/lib/format';
 import { useAllPools, useSupportedTokens, tokenMetaByAddress } from '@/contracts/useVeriFlow';
 import { TokenIcon } from '@/components/ui/TokenIcon';
 import { Reveal } from '@/components/ui/Reveal';
@@ -187,8 +188,8 @@ export function PoolsPage() {
                     <td className="font-mono text-text-secondary">{formatCurrency(pool.volume24h)}</td>
                     <td className="font-mono text-accent-green">{pool.feeAPR.toFixed(2)}%</td>
                     <td className="text-sm text-text-muted">
-                      {formatNumber(Number(formatUnits(pool.reserve0, pool.token0Decimals)))} {pool.token0Symbol} /{' '}
-                      {formatNumber(Number(formatUnits(pool.reserve1, pool.token1Decimals)))} {pool.token1Symbol}
+                      {fmt(pool.reserve0, pool.token0Decimals)} {pool.token0Symbol} /{' '}
+                      {fmt(pool.reserve1, pool.token1Decimals)} {pool.token1Symbol}
                     </td>
                     <td className="text-right">
                       <button className="btn-ghost gap-1 text-xs" onClick={() => navigate('/liquidity')}>
