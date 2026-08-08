@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { useAccount, useConfig, useReadContract, useWaitForTransactionReceipt, useChainId, useBalance, useWriteContract, usePublicClient } from 'wagmi';
+import { useAccount, useChainId, useReadContract, useWaitForTransactionReceipt, useConfig, useBalance, useWriteContract, usePublicClient } from 'wagmi';
+import { useNavigate } from 'react-router-dom';
 import { readContract, writeContract as writeContractAction } from 'wagmi/actions';
 import { parseUnits, formatUnits, erc20Abi, type Address } from 'viem';
 import { ArrowRightLeft, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, ShieldCheck, Fingerprint, BadgeCheck, XCircle } from 'lucide-react';
@@ -35,6 +36,7 @@ export function SwapPage() {
   const { toast } = useToast();
   const { track, confirm, revert } = useTxDock();
   const { open: openWalletModal } = useWalletModal();
+  const navigate = useNavigate();
   const contractAddresses = getContractAddresses(chainId);
   const supportedTokens = useSupportedTokens();
 
@@ -458,8 +460,29 @@ export function SwapPage() {
   const needsApproval = !fromToken.isNative && allowance && quote && parseUnits(fromAmount, fromToken.decimals) > allowance;
   const complianceBlocked = isConnected && !isVerified;
 
+  // EDGE CASE: unverified wallet cannot swap (compliance hook reverts). Surface
+  // a prominent banner with a CTA to the Settings registration flow.
+  const showUnverifiedBanner = isConnected && !isVerified && !isVerifying;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {showUnverifiedBanner && (
+        <div className="flex items-center justify-between gap-4 rounded-2xl border border-warning-primary/40 bg-warning-light/10 p-4">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 flex-shrink-0 text-warning-primary" />
+            <span className="text-sm text-text-primary">
+              Your wallet is not yet verified.
+            </span>
+          </div>
+          <button
+            onClick={() => navigate('/settings')}
+            className="btn-secondary flex-shrink-0 px-3 py-1.5 text-sm"
+          >
+            Verify Now
+          </button>
+        </div>
+      )}
+
       {/* Swap Card */}
       <div className="card-hover">
         <div className="mb-6 flex items-center justify-between">

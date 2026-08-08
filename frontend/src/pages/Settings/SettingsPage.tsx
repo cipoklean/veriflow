@@ -1,16 +1,29 @@
-import { useState } from 'react';
-import { useAccount, useChainId, useReadContract } from 'wagmi';
+import { useState, useRef, useEffect } from 'react';
+import { useAccount, useChainId, useReadContract, useWaitForTransactionReceipt } from 'wagmi';
 import { motion } from 'framer-motion';
-import { Settings2, ShieldCheck, Network, SlidersHorizontal, Clock, Coins, Loader2, AlertTriangle } from 'lucide-react';
+import { Settings2, ShieldCheck, Network, SlidersHorizontal, Clock, Coins, Loader2, AlertTriangle, Fingerprint, BadgeCheck, UserPlus, Copy } from 'lucide-react';
+import { type Address, type Abi, isAddress } from 'viem';
 import { cn } from '@/lib/utils';
 import { getContractAddresses } from '@/contracts/config';
-import { useWalletVerified } from '@/contracts/useVeriFlow';
+import { useWalletVerified, decodeRevertReason } from '@/contracts/useVeriFlow';
 import ComplianceHookAbi from '@/contracts/abis/ComplianceHook.json';
+import CVIRegistryAbi from '@/contracts/abis/CVIRegistry.json';
+import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
+import { useToast } from '@/hooks/useToast';
+import { useTxDock } from '@/components/ui/TxDock';
+import { ActionButton } from '@/components/ui/ActionButton';
+
+const CVI_ABI = CVIRegistryAbi as Abi;
+// A fresh attestation lasts 10 years — long enough that testnet users never
+// hit expiry mid-demo, short enough to be realistic.
+const TEN_YEARS = 10n * 365n * 24n * 3600n;
 
 export function SettingsPage() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const contractAddresses = getContractAddresses(chainId);
+  const { toast } = useToast();
+  const { track, confirm, revert } = useTxDock();
   const [slippage, setSlippage] = useState('0.5');
   const [deadline, setDeadline] = useState('20');
   const [autoApprove, setAutoApprove] = useState(true);
@@ -19,7 +32,7 @@ export function SettingsPage() {
   // NEW-08: live compliance state — CVI verification of the connected wallet
   // and the compliance hook's paused state are read on-chain (no hardcoded
   // "Verified"/"Enforced" badges).
-  const { isVerified, isLoading: isVerifying } = useWalletVerified(address);
+  const { isVerified, isLoading: isVerifying, refetch: refetchVerified } = useWalletVerified(address);
   const { data: hookPaused, isLoading: isPausedLoading } = useReadContract({
     address: contractAddresses.complianceHook,
     abi: ComplianceHookAbi,
@@ -28,6 +41,85 @@ export function SettingsPage() {
     query: { enabled: isConnected },
   });
   const enforcementActive = !hookPaused;
+
+  // CVI registry owner (governor). Registration is owner-gated on the real
+  // Cleanverse contract, so the Admin "Whitelist Wallet" panel only renders
+  // for the owner — regular users get the self-service "Verify My Identity" path.
+  const { data: cviOwner } = useReadContract({
+    address: contractAddresses.cviRegistry,
+    abi: CVI_ABI,
+    functionName: 'owner',
+    chainId: 10143,
+    query: { enabled: isConnected },
+  });
+  const isCVIOwner = !!address && !!cviOwner && address.toLowerCase() === (cviOwner as Address).toLowerCase();
+
+  // Registration write (gas-capped, FE-21). One state machine drives both the
+  // self-service and admin flows; `regMode` records which one is in flight.
+  const { data: regHash, isPending: isRegWriting, error: regWriteError, cappedWriteContract } = useGasCappedWrite();
+  const { isLoading: isRegConfirming, isSuccess: isRegSuccess, isError: isRegError, error: regReceiptError } = useWaitForTransactionReceipt({ hash: regHash });
+  const [regMode, setRegMode] = useState<'self' | 'admin' | null>(null);
+  const [adminTarget, setAdminTarget] = useState('');
+  const handledRegRef = useRef<string | null>(null);
+
+  const registerWalletOnChain = (target: Address) => {
+    const expiry = BigInt(Math.floor(Date.now() / 1000)) + TEN_YEARS;
+    cappedWriteContract({
+      address: contractAddresses.cviRegistry,
+      abi: CVI_ABI,
+      functionName: 'registerWallet',
+      args: [target, 1, 0, '', '', [] as string[], expiry, 0n],
+      chainId: 10143,
+    });
+  };
+
+  const handleVerifySelf = () => {
+    if (!address) return;
+    setRegMode('self');
+    registerWalletOnChain(address);
+  };
+
+  const handleVerifyAdmin = () => {
+    if (!isAddress(adminTarget)) {
+      toast({ title: 'Invalid address', description: 'Paste a valid 0x wallet address.', type: 'error' });
+      return;
+    }
+    setRegMode('admin');
+    registerWalletOnChain(adminTarget as Address);
+  };
+
+  // Refetch the CVI status on success (badge flips green), surface toasts,
+  // and clear the admin input. Idempotent per tx hash.
+  useEffect(() => {
+    if (!isRegSuccess || !regHash || handledRegRef.current === regHash) return;
+    handledRegRef.current = regHash;
+    confirm(regHash);
+    refetchVerified();
+    if (regMode === 'admin') setAdminTarget('');
+    toast({
+      title: regMode === 'admin' ? 'Wallet verified' : 'Identity verified',
+      description: regMode === 'admin' ? `${adminTarget} is now registered.` : 'Your wallet is now registered in the CVI registry.',
+      type: 'success',
+    });
+  }, [isRegSuccess, regHash, confirm, refetchVerified, regMode, adminTarget, toast]);
+
+  useEffect(() => {
+    if (!isRegError || !regHash || handledRegRef.current === regHash) return;
+    handledRegRef.current = regHash;
+    revert(regHash);
+    const reason = decodeRevertReason(regReceiptError ?? regWriteError);
+    toast({
+      title: regMode === 'admin' ? 'Verification failed' : 'Registration failed',
+      description: reason,
+      type: 'error',
+    });
+  }, [isRegError, regHash, revert, regReceiptError, regWriteError, regMode, toast]);
+
+  useEffect(() => {
+    if (regHash && !isRegSuccess && !isRegError) track(regHash, regMode === 'admin' ? 'Verify Address' : 'Verify Identity');
+  }, [regHash, isRegSuccess, isRegError, track, regMode]);
+
+  const regState = isRegWriting || isRegConfirming ? (isRegWriting ? 'signing' : 'pending') : isRegError ? 'error' : isRegSuccess ? 'success' : 'idle';
 
   if (!isConnected) {
     return (
@@ -74,6 +166,82 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
+      {/* Cleanverse Identity — onboarding / verification */}
+      <section className="card-hover" aria-label="Cleanverse identity">
+        <div className="mb-4 flex items-center gap-3 border-b border-border-subtle pb-4">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-teal/10">
+            <Fingerprint className="h-4.5 w-4.5 text-accent-teal" />
+          </span>
+          <div>
+            <h2 className="font-display text-base font-semibold text-text-primary">Cleanverse Identity</h2>
+            <p className="text-xs text-text-muted">Register your wallet in the CVI registry</p>
+          </div>
+        </div>
+
+        <div className="space-y-4 p-4">
+          {/* Status line */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="font-medium text-text-primary">CVI · Identity verification</div>
+              <div className="mt-0.5 text-sm text-text-muted">
+                {isVerifying ? 'Checking on-chain…' : isVerified ? 'Your address is verified' : 'Your address is not verified'}
+              </div>
+            </div>
+            {isVerifying ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Checking
+              </span>
+            ) : isVerified ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-accent-green">
+                <BadgeCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                Verified
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-warning-primary">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                Not Verified
+              </span>
+            )}
+          </div>
+
+          {!isVerified && (
+            <div className="rounded-2xl border border-accent-teal/30 bg-accent-teal/[0.06] p-4">
+              <p className="text-sm text-text-secondary">
+                VeriFlow swaps require a Cleanverse CVI identity check. Register your connected wallet to
+                unlock trading.
+              </p>
+              <div className="mt-3">
+                <ActionButton
+                  state={regMode === 'self' ? regState : 'idle'}
+                  onClick={handleVerifySelf}
+                  disabled={!address || isRegWriting || isRegConfirming}
+                  signingLabel="Confirm in wallet…"
+                  pendingLabel="Registering…"
+                  successLabel="Verified"
+                  errorLabel="Failed"
+                  errorMessage={regMode === 'self' ? decodeRevertReason(regReceiptError ?? regWriteError) : undefined}
+                  onRetry={handleVerifySelf}
+                >
+                  <UserPlus className="h-4 w-4" />
+                  Verify My Identity
+                </ActionButton>
+              </div>
+              <p className="mt-2 text-xs text-text-muted">
+                Calls <span className="font-mono">registerWallet</span> on the CVI registry for your address.
+              </p>
+            </div>
+          )}
+
+          {isVerified && (
+            <div className="flex items-center gap-2 rounded-2xl border border-accent-green/30 bg-accent-green/[0.06] p-4 text-sm text-accent-green">
+              <BadgeCheck className="h-4 w-4" />
+              Your wallet is compliant. Swaps are enabled.
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Trading */}
       <section className="card-hover" aria-label="Trading settings">
         <div className="mb-4 flex items-center gap-3 border-b border-border-subtle pb-4">
@@ -209,6 +377,59 @@ export function SettingsPage() {
           </Row>
         </div>
       </section>
+
+      {/* Admin: Whitelist Wallet — only the CVI owner (governor) sees this */}
+      {isCVIOwner && !isVerified && (
+        <section className="card-hover" aria-label="Admin whitelist wallet">
+          <div className="mb-4 flex items-center gap-3 border-b border-border-subtle pb-4">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-amber/10">
+              <BadgeCheck className="h-4.5 w-4.5 text-accent-amber" />
+            </span>
+            <div>
+              <h2 className="font-display text-base font-semibold text-text-primary">Admin: Whitelist Wallet</h2>
+              <p className="text-xs text-text-muted">Register another address (governor only)</p>
+            </div>
+          </div>
+          <div className="space-y-3 p-4">
+            <p className="text-sm text-text-secondary">
+              You are the CVI registry owner. Paste any wallet address to register it for trading.
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={adminTarget}
+                onChange={e => setAdminTarget(e.target.value)}
+                placeholder="0x… target wallet address"
+                aria-label="Target wallet address to verify"
+                className="input flex-1 px-3 py-2 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => adminTarget && navigator.clipboard?.writeText(adminTarget)}
+                className="rounded-lg border border-white/10 bg-white/[0.04] p-2 text-text-muted transition-colors hover:text-text-primary"
+                aria-label="Copy target address"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+            <ActionButton
+              state={regMode === 'admin' ? regState : 'idle'}
+              onClick={handleVerifyAdmin}
+              disabled={!isAddress(adminTarget) || isRegWriting || isRegConfirming}
+              variant="secondary"
+              signingLabel="Confirm in wallet…"
+              pendingLabel="Verifying…"
+              successLabel="Verified"
+              errorLabel="Failed"
+              errorMessage={regMode === 'admin' ? decodeRevertReason(regReceiptError ?? regWriteError) : undefined}
+              onRetry={handleVerifyAdmin}
+            >
+              <UserPlus className="h-4 w-4" />
+              Verify Address
+            </ActionButton>
+          </div>
+        </section>
+      )}
 
       <p className="flex items-center gap-2 text-xs text-text-muted">
         <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />

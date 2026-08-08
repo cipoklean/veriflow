@@ -177,11 +177,12 @@ export function useVerifiedAssets() {
 
 /**
  * Real CVI check: is this wallet verified in the Cleanverse identity registry?
- * Returns { isVerified, isLoading }. This is a live on-chain read — NOT a timer.
+ * Returns { isVerified, isLoading, refetch }. This is a live on-chain read — NOT a timer.
+ * `refetch` is exposed so a registration tx can instantly refresh the badge.
  */
 export function useWalletVerified(wallet?: Address) {
   const addrs = useVeriFlowAddresses();
-  const { data, isLoading } = useReadContract({
+  const { data, isLoading, refetch } = useReadContract({
     address: addrs.cviRegistry,
     abi: CVI_ABI,
     functionName: 'isVerified',
@@ -189,7 +190,7 @@ export function useWalletVerified(wallet?: Address) {
     chainId: MONAD_TESTNET,
     query: { enabled: !!wallet },
   });
-  return { isVerified: !!data, isLoading };
+  return { isVerified: !!data, isLoading, refetch };
 }
 
 /**
