@@ -41,7 +41,7 @@ export function SwapPage() {
   // State
   const [fromToken, setFromToken] = useState<Token>(supportedTokens[1] ?? supportedTokens[0]); // WMON
   const [toToken, setToToken] = useState<Token>(supportedTokens[2] ?? supportedTokens[0]); // USDC
-  const [fromAmount, setFromAmount] = useState('');
+  const [fromAmount, setFromAmount] = useState('0.01');
   const [toAmount, setToAmount] = useState('');
   const [slippage, setSlippage] = useState(0.5);
   const [showSlippageSettings, setShowSlippageSettings] = useState(false);
@@ -495,6 +495,25 @@ export function SwapPage() {
                 aria-label="Amount to pay"
               />
             </div>
+            {/* QUICK-SIZE CHIPS: faucet-scale presets. 10/25/50% of wallet balance
+                (capped to what the pool can absorb), plus the existing Max. */}
+            <div className="mt-3 flex items-center gap-2">
+              {[0.1, 0.25, 0.5].map(pct => {
+                const preset = walletBalanceNum * pct;
+                const capped = Math.min(preset, maxSwappable);
+                const disabled = hasNoBalance || isSameAsset || capped <= 0;
+                return (
+                  <button
+                    key={pct}
+                    onClick={() => handleFromAmountChange(capped.toFixed(fromToken.decimals))}
+                    disabled={disabled}
+                    className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {pct * 100}%
+                  </button>
+                );
+              })}
+            </div>
             <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
               <span className="font-mono text-sm text-text-secondary">
                 Balance: {safeBalance(fromBalanceFormatted).toFixed(4)} {fromToken.symbol}
@@ -613,12 +632,12 @@ export function SwapPage() {
                   )}
                 </div>
               </Tooltip>
-              <Tooltip content="How much the swap moves the pool price — keep it low to avoid loss" placement="top">
+              <Tooltip content="How much the swap moves the pool price. Testnet pools are seeded from public faucets, so large trades move the price. Reduce size or add liquidity." placement="top">
                 <div className="cursor-help">
                   <div className="text-xs uppercase tracking-wider text-text-muted">Price impact</div>
                   <div className={cn('font-mono',
-                    quote.priceImpact > 15 ? 'text-error-primary' :
-                    quote.priceImpact > 5 ? 'text-warning-primary' :
+                    quote.priceImpact > 5 ? 'text-error-primary' :
+                    quote.priceImpact >= 1 ? 'text-warning-primary' :
                     'text-success-primary')}
                   >
                     {quote.priceImpact.toFixed(2)}%
@@ -628,23 +647,24 @@ export function SwapPage() {
             </div>
 
             {/* HONEST QUOTES: impact warnings + max-swap guidance from real reserves */}
-            {quote.priceImpact > 15 ? (
+            {quote.priceImpact > 5 ? (
               <div className="mt-3 flex items-start gap-2 rounded-xl border border-error-primary/30 bg-error-light/15 p-3 text-error-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 <div className="text-sm">
                   <div className="font-medium">Price impact too high — try a smaller amount or add liquidity</div>
                   <div className="mt-0.5 text-xs text-text-muted">
-                    Impact {quote.priceImpact.toFixed(2)}%: this trade would move the pool price by over 15%.
+                    Impact {quote.priceImpact.toFixed(2)}%: this trade would move the pool price by over 5%.
+                    Testnet pools are seeded from public faucets, so large trades move the price.
                   </div>
                 </div>
               </div>
-            ) : quote.priceImpact > 5 ? (
+            ) : quote.priceImpact >= 1 ? (
               <div className="mt-3 flex items-start gap-2 rounded-xl border border-warning-primary/30 bg-warning-light/10 p-3 text-warning-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 <div className="text-sm">
                   <div className="font-medium">High price impact: {quote.priceImpact.toFixed(2)}%</div>
                   <div className="mt-0.5 text-xs text-text-muted">
-                    The pool is small — this trade moves the price significantly. Consider a smaller amount.
+                    The pool is small — this trade moves the price. Consider a smaller amount.
                   </div>
                 </div>
               </div>
