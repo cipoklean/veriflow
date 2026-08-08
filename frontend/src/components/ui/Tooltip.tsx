@@ -29,6 +29,8 @@ interface TooltipProps {
   className?: string;
   /** When true the trigger is a disabled control — tooltip still fires (critical for disabled buttons). */
   disabled?: boolean;
+  /** When false the tooltip will not open (e.g. suppressed while a dropdown is open). */
+  enabled?: boolean;
 }
 
 /**
@@ -44,6 +46,7 @@ export function Tooltip({
   placement = 'top',
   className,
   disabled = false,
+  enabled = true,
 }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -51,8 +54,8 @@ export function Tooltip({
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { refs, floatingStyles, context, middlewareData } = useFloating({
-    open,
-    onOpenChange: setOpen,
+    open: enabled ? open : false,
+    onOpenChange: (next) => setOpen(enabled ? next : false),
     placement,
     middleware: [offset(8), flip({ fallbackAxisSideDirection: 'start' }), shift({ padding: 8 }), arrow({ element: arrowRef })],
     whileElementsMounted: autoUpdate,
@@ -124,7 +127,7 @@ export function Tooltip({
             exit={{ opacity: 0, scale: 0.95, y: 2 }}
             transition={{ duration: 0.12, ease: 'easeOut' }}
             {...getFloatingProps()}
-            className="z-50 max-w-xs rounded-xl border border-white/12 bg-[#0E1A2B]/95 px-3 py-1.5 text-xs leading-relaxed text-text-primary shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_20px_rgba(45,212,191,0.10)] backdrop-blur-xl"
+            className="z-40 max-w-xs rounded-xl border border-white/12 bg-[#0E1A2B]/95 px-3 py-1.5 text-xs leading-relaxed text-text-primary shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_20px_rgba(45,212,191,0.10)] backdrop-blur-xl"
             role="tooltip"
           >
             {rendered}

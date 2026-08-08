@@ -94,16 +94,20 @@ export function StatCard({ label, value, icon, delta, deltaLabel, spark, loading
   );
 
   // FALLBACK GUARD: the "No data yet" empty state must ONLY show when there is
-  // genuinely no value — i.e. loading, or the value is null/undefined/0/'0'.
-  // A card with real data (e.g. TVL "10.9894 MON", "Verified Assets: 2") but no
-  // sparkline must NOT render the fallback alongside the live number.
+  // genuinely no value — i.e. loading, or the value is null/undefined/''/'0'.
+  // A card with real (even zero) formatted data — "10.9894 MON", "Verified
+  // Assets: 2", "$0.00" — must NOT render the fallback alongside the number.
+  // A formatted string carries a unit/symbol ($ MON % letters), so it is always
+  // a real display value, never "no data". Only a bare 0 (or empty) counts.
   const isValueEmpty = (v: ReactNode): boolean => {
     if (v == null) return true;
     if (typeof v === 'number' || typeof v === 'bigint') return v === 0;
     if (typeof v === 'string') {
       const t = v.trim();
       if (t === '') return true;
-      const n = Number(t.replace(/[^0-9.\-]/g, ''));
+      // Unit/symbol present → real formatted display (e.g. "$0.00", "2 MON").
+      if (/[A-Za-z$%]/.test(t)) return false;
+      const n = Number(t);
       return n === 0 || Number.isNaN(n);
     }
     return false; // ReactElement / other node → treat as present

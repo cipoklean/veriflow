@@ -86,6 +86,7 @@ export function WalletButton() {
   }
 
   const formattedBalance = balance ? formatUnits(balance.value, balance.decimals).slice(0, 8) : '0';
+  const explorerUrl = `https://testnet.monadexplorer.com/address/${address}`;
 
   return (
     <div className="flex items-center gap-2">
@@ -101,74 +102,86 @@ export function WalletButton() {
       )}
 
       <div className="relative" ref={menuRef}>
-        <Tooltip
-          content={address ?? ''}
-          placement="bottom"
-        >
+        {/* Full-address tooltip is SUPPRESSED while the dropdown is open. */}
+        <Tooltip content={address ?? ''} placement="bottom" enabled={!isMenuOpen}>
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="btn-secondary gap-2 min-w-[180px] h-10 justify-between px-3"
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+            className="btn-secondary flex h-10 max-w-[14rem] items-center gap-2 px-4"
           >
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <span className="flex items-center gap-2 min-w-0">
-                <span className="live-dot flex-shrink-0" aria-hidden="true" />
-                <span className="font-mono text-sm truncate">{formatAddress(address!)}</span>
-              </span>
-            </div>
-            <ChevronDown className={cn('h-4 w-4 text-text-muted transition-transform flex-shrink-0', isMenuOpen && 'rotate-180')} />
+            <span className="live-dot flex-shrink-0" aria-hidden="true" />
+            <span className="font-mono text-sm text-text-primary truncate max-w-[10rem]">
+              {formatAddress(address!, 4)}
+            </span>
+            <ChevronDown
+              className={cn('h-4 w-4 flex-shrink-0 text-text-muted transition-transform', isMenuOpen && 'rotate-180')}
+            />
           </button>
         </Tooltip>
 
         {isMenuOpen && (
-          <div className="absolute right-0 mt-2 w-64 bg-bg-secondary border border-border-primary rounded-xl shadow-xl overflow-hidden animate-slide-down z-50">
-            <div className="p-3 border-b border-border-primary">
-              <div className="font-mono text-sm text-text-primary">{formatAddress(address!, 6)}</div>
+          <div
+            role="menu"
+            className="absolute right-0 top-[calc(100%+8px)] z-50 min-w-[280px] overflow-hidden rounded-2xl border border-white/10 bg-[#0E1A2B] shadow-2xl"
+          >
+            {/* Header block */}
+            <div className="p-3">
+              <div className="font-mono text-sm text-text-primary truncate">{formatAddress(address!, 4)}</div>
               {balance && (
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-sm font-mono text-text-primary">{formattedBalance}</span>
+                <div className="mt-1 flex items-baseline gap-1">
+                  <span className="font-mono text-sm text-text-primary">{formattedBalance}</span>
                   <span className="text-sm text-text-secondary">{balance.symbol}</span>
                 </div>
               )}
               {chainId === monadTestnet.id ? (
-                <div className="flex items-center gap-1 mt-2 text-xs text-success-primary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-success-primary" /> Monad Testnet · {chainId}
+                <div className="mt-2 flex items-center gap-1 text-xs text-accent-green">
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent-green" />
+                  Monad Testnet · {chainId}
                 </div>
               ) : (
                 <button
                   onClick={() => switchChain({ chainId: monadTestnet.id })}
-                  className="flex items-center gap-1 mt-2 text-xs text-error-primary hover:underline"
+                  className="mt-2 flex items-center gap-1 text-xs text-error-primary hover:underline"
                 >
                   <AlertTriangle className="h-3 w-3" /> Switch to Monad Testnet
                 </button>
               )}
               <a
-                href={`https://testnet.monadexplorer.com/address/${address}`}
+                href={explorerUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 mt-2 text-xs text-text-muted hover:text-accent-gold transition-colors"
+                className="mt-2 flex items-center gap-1 text-xs text-text-muted hover:text-accent-teal transition-colors"
               >
                 <ExternalLink className="h-3 w-3" />
                 View on Explorer
               </a>
             </div>
-            <div className="py-1">
+
+            {/* Divider */}
+            <div className="my-1 border-t border-white/10" />
+
+            {/* Menu items */}
+            <div className="space-y-1 p-2">
               <button
+                role="menuitem"
                 onClick={() => {
                   navigator.clipboard.writeText(address!);
                   setIsMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-colors hover:bg-white/5 hover:text-text-primary"
               >
                 <Copy className="h-4 w-4" />
                 <span className="flex-1 text-left">Copy Address</span>
               </button>
               <button
+                role="menuitem"
                 onClick={() => {
                   disconnect();
                   window.localStorage.removeItem('wagmi.connected');
                   setIsMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-error-primary hover:bg-error-light/10 transition-colors"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-error-primary transition-colors hover:bg-white/5"
               >
                 <LogOut className="h-4 w-4" />
                 <span className="flex-1 text-left">Disconnect</span>
