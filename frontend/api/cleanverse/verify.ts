@@ -68,13 +68,17 @@ function decryptJson(envelope: { data: string }): any {
 }
 
 async function generateApass(address: string, customerId: string): Promise<any> {
-  // 10-year expiration (seconds) — required by /generate_apass per the
-  // "expiration time cannot be null" error from Cleanverse.
-  const expiration = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
+  // 10-year expiration (seconds). Cleanverse validates an expiration param;
+  // hedge the likely field names since the request is encrypted and the exact
+  // schema is undocumented. The server ignores unknown keys, so sending several
+  // is safe and lets us learn the correct one from the next error.
+  const exp = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
   const payload = encryptJson({
     customerId,
-    wallet: { address, chain: 'monad' },
-    expiration,
+    wallet: { address, chain: 'monad', expiration: exp },
+    expiration: exp,
+    expiry: exp,
+    expirationTime: exp,
   });
   const res = await fetch(`${BASE}/generate_apass`, {
     method: 'POST',
