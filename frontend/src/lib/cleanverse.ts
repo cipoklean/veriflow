@@ -3,7 +3,7 @@
  *
  * SECURITY (M-09 closed): the browser holds NO Cleanverse secrets and performs
  * NO AES. All encryption, the api-id, and the governor registrar key live in
- * Vercel serverless functions (see api/lib/cleanverseServer.ts). The frontend
+ * Vercel serverless functions (api/cleanverse/*.ts, self-contained). The frontend
  * only talks to our own same-origin routes:
  *   - GET /api/cleanverse/verify?address=0x…   (SSE progress stream)
  *   - GET /api/cleanverse/status?address=0x…   (A-Pass tier / expiry)
