@@ -38,3 +38,6 @@ Thumbs.db
 
 # ── Claude Code local skills (not part of the VeriFlow repo) ───────
 .claude/
+
+.vercel
+.env*

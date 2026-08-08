@@ -93,6 +93,22 @@ export function StatCard({ label, value, icon, delta, deltaLabel, spark, loading
     <span className="delta-chip flat">0.00%</span>
   );
 
+  // FALLBACK GUARD: the "No data yet" empty state must ONLY show when there is
+  // genuinely no value — i.e. loading, or the value is null/undefined/0/'0'.
+  // A card with real data (e.g. TVL "10.9894 MON", "Verified Assets: 2") but no
+  // sparkline must NOT render the fallback alongside the live number.
+  const isValueEmpty = (v: ReactNode): boolean => {
+    if (v == null) return true;
+    if (typeof v === 'number' || typeof v === 'bigint') return v === 0;
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t === '') return true;
+      const n = Number(t.replace(/[^0-9.\-]/g, ''));
+      return n === 0 || Number.isNaN(n);
+    }
+    return false; // ReactElement / other node → treat as present
+  };
+
   return (
     <div className={cn('bento-stat', className)}>
       <div className="flex items-start justify-between gap-3">
@@ -113,9 +129,9 @@ export function StatCard({ label, value, icon, delta, deltaLabel, spark, loading
           <span className="skeleton inline-block h-4 w-16" />
         ) : spark && spark.length >= 2 ? (
           <Sparkline points={spark} className="h-10 w-full max-w-[120px]" />
-        ) : (
+        ) : isValueEmpty(value) ? (
           <span className="text-xs text-text-muted">No data yet — be the first</span>
-        )}
+        ) : null}
         {chip}
       </div>
     </div>
