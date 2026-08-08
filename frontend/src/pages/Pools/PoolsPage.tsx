@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { formatUnits } from 'viem';
 import { motion } from 'framer-motion';
 import { ChevronDown, ChevronUp, Loader2, Zap, TrendingUp, DollarSign, Shield, Plus } from 'lucide-react';
-import { cn, formatAddress, formatCurrency, formatNumber } from '@/lib/utils';
+import { cn, formatAddress, formatCurrency } from '@/lib/utils';
 import { fmt } from '@/lib/format';
 import { useAllPools, useSupportedTokens, tokenMetaByAddress } from '@/contracts/useVeriFlow';
 import { TokenIcon } from '@/components/ui/TokenIcon';

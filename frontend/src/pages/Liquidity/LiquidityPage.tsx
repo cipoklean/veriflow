@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAccount, useConfig, useReadContract, useWaitForTransactionReceipt, useChainId, useBalance, useWriteContract, usePublicClient } from 'wagmi';
 import { readContract, writeContract as writeContractAction } from 'wagmi/actions';
-import { parseUnits, formatUnits, erc20Abi, type Address } from 'viem';
+import { parseUnits, erc20Abi, type Address } from 'viem';
 import { Zap, Minus, Shield, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, Wallet, ArrowRightLeft } from 'lucide-react';
-import { cn, formatNumber } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
