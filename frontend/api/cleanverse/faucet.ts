@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * POST /api/cleanverse/faucet  (BONUS — one-shot)
  * Body: { chain?, symbol?, depositAddress?, amount? }

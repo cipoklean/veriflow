@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * GET /api/cleanverse/status?address=0x...
  * Proxies /query_apass so the UI can show A-Pass tier / expiry.
