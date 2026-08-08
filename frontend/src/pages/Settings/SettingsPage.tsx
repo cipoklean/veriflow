@@ -12,6 +12,7 @@ import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { useToast } from '@/hooks/useToast';
 import { useTxDock } from '@/components/ui/TxDock';
 import { ActionButton } from '@/components/ui/ActionButton';
+import { verifyStream, fetchCleanverseStatus, type VerifyStep } from '@/lib/cleanverse';
 
 const CVI_ABI = CVIRegistryAbi as Abi;
 // A fresh attestation lasts 10 years — long enough that testnet users never
@@ -54,13 +55,21 @@ export function SettingsPage() {
   });
   const isCVIOwner = !!address && !!cviOwner && address.toLowerCase() === (cviOwner as Address).toLowerCase();
 
-  // Registration write (gas-capped, FE-21). One state machine drives both the
-  // self-service and admin flows; `regMode` records which one is in flight.
+  // Governor admin fallback: direct on-chain registerWallet from the owner's
+  // connected wallet (manual path). Users never self-register — that is done
+  // server-side by the institution via /api/cleanverse/verify.
   const { data: regHash, isPending: isRegWriting, error: regWriteError, cappedWriteContract } = useGasCappedWrite();
   const { isLoading: isRegConfirming, isSuccess: isRegSuccess, isError: isRegError, error: regReceiptError } = useWaitForTransactionReceipt({ hash: regHash });
   const [regMode, setRegMode] = useState<'self' | 'admin' | null>(null);
   const [adminTarget, setAdminTarget] = useState('');
   const handledRegRef = useRef<string | null>(null);
+
+  // Cleanverse (institution) verification flow state.
+  const [ccBusy, setCcBusy] = useState(false);
+  const [ccStep, setCcStep] = useState('');
+  const [ccError, setCcError] = useState<string | null>(null);
+  const [ccDone, setCcDone] = useState(false);
+  const [apassTier, setApassTier] = useState<number | null>(null);
 
   const registerWalletOnChain = (target: Address) => {
     const expiry = BigInt(Math.floor(Date.now() / 1000)) + TEN_YEARS;
@@ -73,12 +82,6 @@ export function SettingsPage() {
     });
   };
 
-  const handleVerifySelf = () => {
-    if (!address) return;
-    setRegMode('self');
-    registerWalletOnChain(address);
-  };
-
   const handleVerifyAdmin = () => {
     if (!isAddress(adminTarget)) {
       toast({ title: 'Invalid address', description: 'Paste a valid 0x wallet address.', type: 'error' });
@@ -87,6 +90,67 @@ export function SettingsPage() {
     setRegMode('admin');
     registerWalletOnChain(adminTarget as Address);
   };
+
+  // Real Cleanverse flow (institution registers on-chain with the governor key).
+  // Streams progress via SSE; we poll useWalletVerified every 3s so the badge
+  // flips to Compliant as soon as the on-chain write confirms.
+  const handleVerifyCleanverse = () => {
+    if (!address) return;
+    setCcBusy(true);
+    setCcError(null);
+    setCcDone(false);
+    setCcStep('Connecting to Cleanverse…');
+    const es = verifyStream(address);
+    const poll = window.setInterval(() => refetchVerified(), 3000);
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as VerifyStep;
+        if (msg.label) setCcStep(msg.label);
+        if (msg.step === 'done') {
+          setCcDone(true);
+          setCcBusy(false);
+          refetchVerified();
+          window.clearInterval(poll);
+          es.close();
+        } else if (msg.step === 'error') {
+          setCcError(msg.error || 'Verification failed');
+          setCcBusy(false);
+          window.clearInterval(poll);
+          es.close();
+        }
+      } catch {
+        /* ignore malformed frame */
+      }
+    };
+    es.onerror = () => {
+      setCcError('Lost connection to the verification service. Try again.');
+      setCcBusy(false);
+      window.clearInterval(poll);
+      es.close();
+    };
+  };
+
+  // After the flow reports done, keep polling until the badge actually flips
+  // (the governor tx may confirm a few seconds after the SSE closes).
+  useEffect(() => {
+    if (!ccDone || isVerified) return;
+    const poll = window.setInterval(() => refetchVerified(), 3000);
+    const stop = window.setTimeout(() => window.clearInterval(poll), 120000);
+    return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stop);
+    };
+  }, [ccDone, isVerified, refetchVerified]);
+
+  // Surface the A-Pass tier from /status when unverified.
+  useEffect(() => {
+    if (!isConnected || isVerified || !address) return;
+    fetchCleanverseStatus(address)
+      .then((d) => {
+        if (d?.data?.tier != null) setApassTier(d.data.tier);
+      })
+      .catch(() => {});
+  }, [isConnected, isVerified, address]);
 
   // Refetch the CVI status on success (badge flips green), surface toasts,
   // and clear the admin input. Idempotent per tx hash.
@@ -206,29 +270,31 @@ export function SettingsPage() {
           </div>
 
           {!isVerified && (
-            <div className="rounded-2xl border border-accent-teal/30 bg-accent-teal/[0.06] p-4">
+            <div className="space-y-3 rounded-2xl border border-accent-teal/30 bg-accent-teal/[0.06] p-4">
               <p className="text-sm text-text-secondary">
-                VeriFlow swaps require a Cleanverse CVI identity check. Register your connected wallet to
+                VeriFlow swaps require a Cleanverse CVI identity check. Verify your connected wallet to
                 unlock trading.
               </p>
-              <div className="mt-3">
-                <ActionButton
-                  state={regMode === 'self' ? regState : 'idle'}
-                  onClick={handleVerifySelf}
-                  disabled={!address || isRegWriting || isRegConfirming}
-                  signingLabel="Confirm in wallet…"
-                  pendingLabel="Registering…"
-                  successLabel="Verified"
-                  errorLabel="Failed"
-                  errorMessage={regMode === 'self' ? decodeRevertReason(regReceiptError ?? regWriteError) : undefined}
-                  onRetry={handleVerifySelf}
-                >
-                  <UserPlus className="h-4 w-4" />
-                  Verify My Identity
-                </ActionButton>
-              </div>
-              <p className="mt-2 text-xs text-text-muted">
-                Calls <span className="font-mono">registerWallet</span> on the CVI registry for your address.
+              <ActionButton
+                state={ccBusy ? 'pending' : ccError ? 'error' : ccDone ? 'success' : 'idle'}
+                onClick={handleVerifyCleanverse}
+                disabled={!address || ccBusy}
+                signingLabel="Connecting…"
+                pendingLabel={ccStep || 'Verifying…'}
+                successLabel="Verified"
+                errorLabel="Failed"
+                errorMessage={ccError || undefined}
+                onRetry={handleVerifyCleanverse}
+              >
+                <Fingerprint className="h-4 w-4" />
+                Verify with Cleanverse
+              </ActionButton>
+              {apassTier != null && (
+                <p className="text-xs text-text-muted">A-Pass tier: {apassTier}</p>
+              )}
+              <p className="text-xs text-text-muted">
+                VeriFlow (the institution) registers your wallet on-chain with the governor key — you never
+                sign a registration transaction.
               </p>
             </div>
           )}
