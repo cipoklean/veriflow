@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/useToast';
 import { useTxDock } from '@/components/ui/TxDock';
 import { Reveal } from '@/components/ui/Reveal';
 import { ActionButton } from '@/components/ui/ActionButton';
-import { verifyStream, fetchCleanverseStatus, type VerifyStep } from '@/lib/cleanverse';
+import { verifyOnce, fetchCleanverseStatus, type VerifyResult } from '@/lib/cleanverse';
 
 const CVI_ABI = CVIRegistryAbi as Abi;
 // A fresh attestation lasts 10 years — long enough that testnet users never
@@ -93,42 +93,38 @@ export function SettingsPage() {
   };
 
   // Real Cleanverse flow (institution registers on-chain with the governor key).
-  // Streams progress via SSE; we poll useWalletVerified every 3s so the badge
-  // flips to Compliant as soon as the on-chain write confirms.
+  // One-shot JSON call; we poll useWalletVerified every 3s so the badge flips to
+  // Compliant as soon as the on-chain write confirms.
   const handleVerifyCleanverse = () => {
     if (!address) return;
     setCcBusy(true);
     setCcError(null);
     setCcDone(false);
     setCcStep('Connecting to Cleanverse…');
-    const es = verifyStream(address);
     const poll = window.setInterval(() => refetchVerified(), 3000);
-    es.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data) as VerifyStep;
-        if (msg.label) setCcStep(msg.label);
-        if (msg.step === 'done') {
+    verifyOnce(address)
+      .then((msg: VerifyResult) => {
+        if (msg.hash) setCcStep('On-chain confirmation…');
+        if (msg.step === 'done' || msg.ok) {
           setCcDone(true);
           setCcBusy(false);
           refetchVerified();
           window.clearInterval(poll);
-          es.close();
-        } else if (msg.step === 'error') {
+        } else {
           setCcError(msg.error || 'Verification failed');
           setCcBusy(false);
           window.clearInterval(poll);
-          es.close();
         }
-      } catch {
-        /* ignore malformed frame */
-      }
-    };
-    es.onerror = () => {
-      setCcError('Lost connection to the verification service. Try again.');
-      setCcBusy(false);
-      window.clearInterval(poll);
-      es.close();
-    };
+        if (msg.rawCleanverseResponse) {
+          // Surface the raw Cleanverse body in the console while we debug.
+          console.log('[cleanverse verify] rawCleanverseResponse', msg.rawCleanverseResponse);
+        }
+      })
+      .catch(() => {
+        setCcError('Lost connection to the verification service. Try again.');
+        setCcBusy(false);
+        window.clearInterval(poll);
+      });
   };
 
   // After the flow reports done, keep polling until the badge actually flips
@@ -148,7 +144,7 @@ export function SettingsPage() {
     if (!isConnected || isVerified || !address) return;
     fetchCleanverseStatus(address)
       .then((d) => {
-        if (d?.data?.tier != null) setApassTier(d.data.tier);
+        if (d?.apass?.tier != null) setApassTier(d.apass.tier);
       })
       .catch(() => {});
   }, [isConnected, isVerified, address]);
