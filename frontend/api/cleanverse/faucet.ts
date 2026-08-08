@@ -2,38 +2,61 @@
 /**
  * POST /api/cleanverse/faucet  (BONUS — one-shot)
  * Body: { chain?, symbol?, depositAddress?, amount? }
- * Tries the Cleanverse sandbox faucet for Monad-testnet USDC. If it grants
- * funds to the governor address, use them to deepen the WMON/USDC pool. We log
- * the raw response so the result is visible in Vercel function logs.
+ * Tries the Cleanverse sandbox faucet for Monad-testnet USDC. If it grants funds
+ * to the governor address, use them to deepen the WMON/USDC pool. We log the raw
+ * response so the result is visible in Vercel function logs.
  *
- * Self-contained on purpose: Vercel's Node serverless build does NOT transpile
- * sibling .ts modules, so the prior relative import failed with
- * ERR_MODULE_NOT_FOUND. The helper is inlined.
+ * Vercel runs this as a LEGACY Node.js function — the handler signature is
+ * (req: IncomingMessage, res: ServerResponse). A returned Response is ignored by
+ * that runtime, so we read the POST body from req and write through res.
+ * Self-contained on purpose (no sibling .ts imports -> ERR_MODULE_NOT_FOUND).
  */
+import type { IncomingMessage, ServerResponse } from 'http';
+
 const BASE = process.env.CLEANVERSE_BASE || 'https://uatapi.cleanverse.com/api/cooperate';
 const API_ID = process.env.CLEANVERSE_API_ID;
 
 export const config = { runtime: 'nodejs', maxDuration: 30 };
 
-export default async function handler(req: Request): Promise<Response> {
+function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (c) => (data += c));
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(data || '{}'));
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!API_ID) {
-    return Response.json({ ok: false, error: 'Cleanverse not configured (CLEANVERSE_API_ID)' }, { status: 500 });
+    sendJson(res, 500, { ok: false, error: 'Cleanverse not configured (CLEANVERSE_API_ID)' });
+    return;
   }
   try {
-    const body = await req.json().catch(() => ({} as Record<string, unknown>));
+    const body = await readBody(req);
     const payload = {
       chain: (body.chain as string) || 'monad',
       symbol: (body.symbol as string) || 'usdc',
       depositAddress: body.depositAddress as string | undefined,
       amount: (body.amount as string) || '2000',
     };
-    // BUG FIX: full absolute base for the outgoing call.
-    const res = await fetch(`${BASE}/faucet`, {
+    // Full absolute base for the outgoing call (never relative).
+    const r = await fetch(`${BASE}/faucet`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api-id': API_ID },
       body: JSON.stringify(payload),
     });
-    const text = await res.text();
+    const text = await r.text();
     let json: any;
     try {
       json = JSON.parse(text);
@@ -42,11 +65,12 @@ export default async function handler(req: Request): Promise<Response> {
     }
     console.log('[cleanverse faucet]', JSON.stringify(json));
     if (json && json.code && json.code !== '0000') {
-      return Response.json({ ok: false, error: json.message || `Cleanverse error ${json.code}` }, { status: 502 });
+      sendJson(res, 502, { ok: false, error: json.message || `Cleanverse error ${json.code}` });
+      return;
     }
-    return Response.json({ ok: true, result: json });
+    sendJson(res, 200, { ok: true, result: json });
   } catch (e: any) {
     console.log('[cleanverse faucet] error', e?.message);
-    return Response.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    sendJson(res, 500, { ok: false, error: e?.message || String(e) });
   }
 }

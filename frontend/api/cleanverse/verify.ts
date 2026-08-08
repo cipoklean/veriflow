@@ -2,23 +2,25 @@
 /**
  * GET /api/cleanverse/verify?address=0x...
  *
- * Server-Sent Events stream. Orchestrates the real Cleanverse identity flow
- * as the INSTITUTION (VeriFlow), so the end user never signs a registration
- * transaction:
+ * Server-Sent Events stream. Orchestrates the real Cleanverse identity flow as
+ * the INSTITUTION (VeriFlow), so the end user never signs a registration tx:
  *   1. generate customerId
  *   2. encrypted POST /generate_apass
  *   3. poll plain POST /query_apass until a record exists (<=60s)
  *   4. registerWallet(address) on our CVI registry via REGISTRAR_PRIVATE_KEY
  *   5. emit steps so the UI can show progress, then {ok:true}
  *
- * SECURITY (M-09): all secrets (CLEANVERSE_API_KEY, CLEANVERSE_API_ID,
- * REGISTRAR_PRIVATE_KEY) are read from process.env here and never shipped to
- * the browser. The frontend only opens this same-origin SSE route.
+ * SECURITY (M-09): secrets (CLEANVERSE_API_KEY, CLEANVERSE_API_ID,
+ * REGISTRAR_PRIVATE_KEY) are read from process.env here, never shipped to the
+ * browser. The frontend only opens this same-origin SSE route.
  *
- * Self-contained on purpose: Vercel's Node serverless build does NOT transpile
- * sibling .ts modules, so a relative import (../lib/cleanverseServer.js) fails
- * at runtime with ERR_MODULE_NOT_FOUND. Everything this handler needs is inlined.
+ * IMPORTANT: Vercel runs this as a LEGACY Node.js function — the handler
+ * signature is (req: IncomingMessage, res: ServerResponse). A returned Response
+ * is ignored by that runtime, so we write through `res` for SSE and read the
+ * query from req.url. Self-contained on purpose (no sibling .ts imports, which
+ * the legacy bundler does not transpile -> ERR_MODULE_NOT_FOUND).
  */
+import type { IncomingMessage, ServerResponse } from 'http';
 import { createCipheriv, createDecipheriv } from 'crypto';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -35,7 +37,6 @@ function aesKey(): Buffer {
   return Buffer.from(API_KEY, 'base64');
 }
 
-/** Encrypt a JSON payload into the { data: "<base64>" } envelope (zero IV). */
 function encryptJson(payload: unknown): { data: string } {
   const key = aesKey();
   const cipher = createCipheriv('aes-256-cbc', key, ZERO_IV);
@@ -44,13 +45,22 @@ function encryptJson(payload: unknown): { data: string } {
   return { data: enc.toString('base64') };
 }
 
-/** Decrypt an envelope back to an object (used if a response is encrypted). */
 function decryptJson(envelope: { data: string }): any {
   const key = aesKey();
   const decipher = createDecipheriv('aes-256-cbc', key, ZERO_IV);
   const buf = Buffer.from(envelope.data, 'base64');
   const dec = Buffer.concat([decipher.update(buf), decipher.final()]);
   return JSON.parse(dec.toString('utf8'));
+}
+
+export const config = { runtime: 'nodejs', maxDuration: 60 };
+
+const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+
+function getAddress(req: IncomingMessage): string {
+  const u = req.url || '';
+  const q = u.split('?')[1] || '';
+  return (new URLSearchParams(q).get('address') || '').trim();
 }
 
 async function cleanversePost(path: string, body: unknown, encrypted: boolean): Promise<any> {
@@ -61,7 +71,7 @@ async function cleanversePost(path: string, body: unknown, encrypted: boolean): 
     'api-id': API_ID,
   };
   const payload = encrypted ? encryptJson(body) : (body as Record<string, unknown>);
-  // BUG FIX: outgoing calls use the FULL absolute base, never a relative path.
+  // Full absolute base for the outgoing call (never relative).
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers,
@@ -74,12 +84,11 @@ async function cleanversePost(path: string, body: unknown, encrypted: boolean): 
   } catch {
     json = { raw: text };
   }
-  // Some endpoints return an encrypted envelope { data: "..." }.
   if (json && typeof json.data === 'string') {
     try {
       json = decryptJson(json);
     } catch {
-      /* not encrypted — leave as-is */
+      /* not encrypted */
     }
   }
   if (json && json.code && json.code !== '0000') {
@@ -88,7 +97,6 @@ async function cleanversePost(path: string, body: unknown, encrypted: boolean): 
   return json;
 }
 
-/** customerId = "VF" + timestamp(base36) + random alnum (>=12 chars, [A-Za-z0-9]). */
 function makeCustomerId(): string {
   const ts = Date.now().toString(36);
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -105,7 +113,6 @@ async function queryApass(address: string): Promise<any> {
   return cleanversePost('/query_apass', { chain: 'monad', address }, false);
 }
 
-/** Poll /query_apass until a record exists (up to `timeoutMs`). */
 async function waitForApass(address: string, timeoutMs = 60000): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   let last: any = null;
@@ -119,8 +126,6 @@ async function waitForApass(address: string, timeoutMs = 60000): Promise<any> {
   }
   return last;
 }
-
-// ── On-chain registration (institution = governor registrar key) ──────────────
 
 const CVI_REGISTRY = '0x5aa3C294b291d29aBF203c780C3C22dC43B21173' as const;
 const RPC_URL = process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
@@ -151,9 +156,6 @@ const CVI_ABI = [
   },
 ] as const;
 
-/** Mirror Cleanverse's on-chain registration: the institution (governor) writes
- *  the wallet into the CVI registry via REGISTRAR_PRIVATE_KEY. Awaits the
- *  receipt so the caller can report on-chain confirmation. */
 async function registerWalletOnChain(address: string, tier = 1): Promise<{ hash: string; status: string }> {
   const pk = process.env.REGISTRAR_PRIVATE_KEY;
   if (!pk) throw new Error('Registrar key not configured (REGISTRAR_PRIVATE_KEY)');
@@ -173,55 +175,40 @@ async function registerWalletOnChain(address: string, tier = 1): Promise<{ hash:
   return { hash: receipt.transactionHash, status: receipt.status };
 }
 
-const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const address = getAddress(req);
 
-export const config = { runtime: 'nodejs', maxDuration: 60 };
-
-export default async function handler(req: Request): Promise<Response> {
-  // BUG FIX (BUG 1): do NOT call `new URL(req.url)` — on Vercel the request URL
-  // may arrive relative, which throws "Invalid URL". Parse the query string
-  // directly from whatever form req.url takes (relative or absolute).
-  const rawQuery = req.url.split('?')[1] || '';
-  const address = (new URLSearchParams(rawQuery).get('address') || '').trim();
-
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (o: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(o)}\n\n`));
-      try {
-        if (!ADDR_RE.test(address)) {
-          send({ step: 'error', label: 'Failed', ok: false, error: 'Invalid wallet address' });
-          controller.close();
-          return;
-        }
-
-        const customerId = makeCustomerId();
-        send({ step: 'apass_submitted', label: 'Submitting A-Pass…', ok: true });
-
-        await generateApass(address, customerId);
-
-        send({ step: 'apass_polling', label: 'A-Pass registered…', ok: true });
-        const apass = await waitForApass(address, 60000);
-        const tier = (apass?.data?.tier ?? apass?.tier ?? 1) as number;
-
-        send({ step: 'onchain', label: 'On-chain confirmation…', ok: true });
-
-        const result = await registerWalletOnChain(address, tier);
-        send({ step: 'done', label: 'Verified', ok: true, hash: result.hash, tier });
-      } catch (e: any) {
-        send({ step: 'error', label: 'Failed', ok: false, error: e?.message || String(e) });
-      } finally {
-        controller.close();
-      }
-    },
+  // Legacy Node runtime: write the SSE stream through `res`.
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
   });
+  const send = (o: Record<string, unknown>) => res.write(`data: ${JSON.stringify(o)}\n\n`);
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    },
-  });
+  try {
+    if (!ADDR_RE.test(address)) {
+      send({ step: 'error', label: 'Failed', ok: false, error: 'Invalid wallet address' });
+      res.end();
+      return;
+    }
+
+    const customerId = makeCustomerId();
+    send({ step: 'apass_submitted', label: 'Submitting A-Pass…', ok: true });
+
+    await generateApass(address, customerId);
+
+    send({ step: 'apass_polling', label: 'A-Pass registered…', ok: true });
+    const apass = await waitForApass(address, 60000);
+    const tier = (apass?.data?.tier ?? apass?.tier ?? 1) as number;
+
+    send({ step: 'onchain', label: 'On-chain confirmation…', ok: true });
+
+    const result = await registerWalletOnChain(address, tier);
+    send({ step: 'done', label: 'Verified', ok: true, hash: result.hash, tier });
+  } catch (e: any) {
+    send({ step: 'error', label: 'Failed', ok: false, error: e?.message || String(e) });
+  } finally {
+    res.end();
+  }
 }
