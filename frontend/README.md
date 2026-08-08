@@ -61,6 +61,28 @@ initial liquidity. Until then the UI honestly shows "No pools found" / live zero
 - `npm run build` — typecheck (`tsc -b`) + production build (`vite build`)
 - `npm run preview` — serve the production build
 
+## Accepted lint warnings (oxlint)
+
+`npm run lint` reports 4 warnings and 0 errors. All four are accepted by design:
+
+1. `react-hooks(exhaustive-deps)` — `LiquidityPage.tsx` — the approval-confirmed
+   effect omits `handleAddLiquidity`/`handleRemoveLiquidity`/`toast` from its deps.
+   These handlers embed the transaction **deadline** (`Math.floor(Date.now() / 1000)`)
+   and would re-fire the effect on every render if added; the effect intentionally
+   runs only when an approval receipt confirms (`[isApproveConfirmed, approvalStep]`).
+2. `react-hooks(exhaustive-deps)` — `SwapPage.tsx` — same pattern for
+   `handleSwap`/`toast` in the approval-confirmed effect; identical deadline rationale.
+3. `react(only-export-components)` — `hooks/useToast.tsx` — the file exports the
+   `ToastProvider` component AND the `useToast` hook; splitting them into separate
+   files would break the provider/consumer wiring for marginal fast-refresh benefit.
+4. `react(only-export-components)` — `components/ui/TxDock.tsx` — same pattern for
+   `TxDockProvider` + `useTxDock` (global pending-tx tracker); identical rationale.
+5. `react(only-export-components)` — `components/VeriFlowApp/WalletModalProvider.tsx` —
+   same pattern for `WalletModalProvider` + `useWalletModal` (FE-01: one connect-modal
+   state shared by TopBar and gated-page CTAs); identical rationale.
+6. `eslint(no-unused-vars)` — `SwapPage.tsx` — `catch (e)` where the error is
+   intentionally swallowed (quote recalculation already guards the failure path).
+
 ## Notes
 
 - Compliance is enforced on-chain by `ComplianceHook` (fail-closed). The Cleanverse API

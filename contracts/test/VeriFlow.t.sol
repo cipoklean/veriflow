@@ -97,6 +97,10 @@ contract VeriFlowTest is Test {
         tokenA = new MockERC20("Token A", "TKA", 18, 1_000_000 ether);
         tokenB = new MockERC20("Token B", "TKB", 18, 1_000_000 ether);
         router = new VeriRouter(address(factory), address(weth), hook);
+        // NEW-01: the factory must know the router so pairs can exempt
+        // router-mediated calls from the CVI(msg.sender) check. The router
+        // itself stays CVI-unregistered (proven by the multi-hop regression).
+        factory.setRouter(address(router));
 
         // CVA: every tradable asset must be a verified Cleanverse asset.
         cva.registerAsset(address(tokenA), address(tokenA), "TKA", "Token A", 18, false, address(0), address(0));
@@ -205,13 +209,18 @@ contract VeriFlowTest is Test {
         path[0] = address(weth);
         path[1] = address(tokenB);
 
+        uint256 aliceBefore = alice.balance;
         vm.prank(alice);
         router.swapExactETHForTokens{value: 5 ether}(1, path, bob, block.timestamp + 1 hours);
 
         uint256 kAfter = _k(pair);
         assertGe(kAfter, kBefore, "k must never decrease after ETH swap");
         assertGt(tokenB.balanceOf(bob), 0, "bob received tokenB");
-        assertEq(alice.balance + 0 ether, alice.balance, "alice ETH unchanged sanity");
+        // NEW-12: the intended invariant — alice paid exactly her 5 ether input
+        // (swapExactETHForTokens spends msg.value in full; the router only
+        // refunds when msg.value > amounts[0], and amounts[0] == msg.value for
+        // an exact-input swap). Her ETH balance must drop by exactly 5 ether.
+        assertEq(alice.balance, aliceBefore - 5 ether, "alice paid exactly her 5 ether input");
     }
 
     function testSwapETHForExactTokensRefundsExcessETH() public {
@@ -253,9 +262,12 @@ contract VeriFlowTest is Test {
         // First deposit: liquidity = sqrt(a*b) - MINIMUM_LIQUIDITY.
         uint256 expected = Math.sqrt(100 ether * 100 ether) - 1000;
         assertEq(lp, expected, "first deposit mints sqrt(amount0*amount1) - MINIMUM_LIQUIDITY");
-        // MINIMUM_LIQUIDITY (1000 LP) is permanently burned: supply excludes it.
-        assertEq(pair.totalSupply(), lp, "totalSupply excludes burned MINIMUM_LIQUIDITY");
-        assertEq(pair.balanceOf(address(pair)), 0, "no LP parked at the pair itself");
+        // NEW-02: MINIMUM_LIQUIDITY (1000 LP) is PERMANENTLY locked at the dead
+        // address — the mint-to-self-then-burn trick was a net no-op and left no
+        // lock. The dead shares must stay in totalSupply forever.
+        address DEAD = 0x000000000000000000000000000000000000dEaD;
+        assertEq(pair.balanceOf(DEAD), 1000, "dead address holds MINIMUM_LIQUIDITY");
+        assertEq(pair.totalSupply(), lp + 1000, "totalSupply includes the permanently locked shares");
     }
 
     function testRemoveLiquidityReturnsProportional() public {
@@ -267,6 +279,9 @@ contract VeriFlowTest is Test {
         VeriPair(pairAddr).approve(address(router), lp);
         uint256 aliceABefore = tokenA.balanceOf(alice);
         uint256 aliceBBefore = tokenB.balanceOf(alice);
+        // Share math uses the PRE-removal totalSupply (which includes the 1000
+        // permanently-locked dead shares, NEW-02).
+        uint256 totalSupply = pair.totalSupply();
 
         vm.prank(alice);
         router.removeLiquidity(
@@ -274,9 +289,9 @@ contract VeriFlowTest is Test {
         );
 
         // ~half of each reserve returned (within rounding).
-        uint256 halfA = (100 ether * (lp / 2)) / lp;
+        uint256 halfA = (100 ether * (lp / 2)) / totalSupply;
         assertApproxEqAbs(tokenA.balanceOf(alice) - aliceABefore, halfA, 2, "~half tokenA returned");
-        uint256 halfB = (100 ether * (lp / 2)) / lp;
+        uint256 halfB = (100 ether * (lp / 2)) / totalSupply;
         assertApproxEqAbs(tokenB.balanceOf(alice) - aliceBBefore, halfB, 2, "~half tokenB returned");
     }
 
@@ -293,34 +308,34 @@ contract VeriFlowTest is Test {
         );
 
         assertEq(pair.balanceOf(alice), 0, "alice burned all her LP");
-        // 1000 MINIMUM_LIQUIDITY stayed burned: supply drops to 0, never back to 1000.
-        assertEq(pair.totalSupply(), 0, "no LP resurrection after full removal");
+        // NEW-02: the 1000 MINIMUM_LIQUIDITY dead shares stay locked forever —
+        // totalSupply can never return to 0 (or resurrect the locked liquidity).
+        assertEq(pair.totalSupply(), 1000, "dead shares remain locked after full user withdrawal");
     }
 
     function testFirstDepositorInflationAttack() public {
-        // Attacker (alice) front-runs with a minimal deposit, then inflates the
-        // price by donating tokens directly to the pair.
+        // NEW-02: with the permanent MINIMUM_LIQUIDITY lock, a one-sided
+        // donation can no longer round a victim's deposit to zero (totalSupply
+        // includes the 1000 dead shares), so the classic attack is neutralized.
         address pairAddr = factory.createPair(address(tokenA), address(tokenB));
         VeriPair pair = VeriPair(pairAddr);
 
-        // Minimal first deposit: sqrt(1001*1001) - 1000 = 1 LP.
+        // Attacker seeds minimal + one-sided donation to skew the price.
         vm.prank(alice);
-        (, , uint256 attackerLp) = router.addLiquidity(address(tokenA), address(tokenB), 1001, 1001, 0, 0, alice, block.timestamp + 1 hours);
-        assertEq(attackerLp, 1, "attacker holds 1 LP");
-
-        // Attacker donates a large amount of tokenA directly to the pool (no LP)
-        // and syncs reserves, skewing them so a subsequent deposit mints ~0 LP.
+        router.addLiquidity(
+            address(tokenA), address(tokenB), 1001, 1001, 0, 0, alice, block.timestamp + 1 hours
+        );
+        // Donation comes from the test contract (holds the 1M minted supply).
         tokenA.transfer(pairAddr, 2_000 ether);
         pair.sync();
 
-        // Victim (bob) deposits 1000 ether of each; the skewed reserves make the
-        // quoted tokenB amount ~500 wei and LP minted rounds to zero ->
-        // INSUFFICIENT_LIQUIDITY_MINTED reverts.
+        // Victim deposit must mint POSITIVE LP (not revert with
+        // INSUFFICIENT_LIQUIDITY_MINTED) — the dead shares keep supply >= 1001.
         vm.prank(bob);
-        vm.expectRevert(bytes("INSUFFICIENT_LIQUIDITY_MINTED"));
-        router.addLiquidity(
+        (, , uint256 victimLp) = router.addLiquidity(
             address(tokenA), address(tokenB), 1000 ether, 1000 ether, 0, 0, bob, block.timestamp + 1 hours
         );
+        assertGt(victimLp, 0, "victim receives positive LP - drain neutralized");
     }
 
     function testSecondDepositorGetsFairShare() public {
@@ -379,6 +394,78 @@ contract VeriFlowTest is Test {
         router.swapExactTokensForTokens(5 ether, 1, path, carol, block.timestamp + 1 hours);
     }
 
+    // ============================================================
+    // NEW-01: direct pair.swap must not bypass compliance via to == msg.sender
+    // ============================================================
+
+    function testDirectPairSwapUnverifiedReverts() public {
+        // An unverified user (carol) must NOT be able to call pair.swap directly
+        // with to == msg.sender to dodge every compliance check.
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+
+        // Deliver input directly to the pair, then swap out to herself.
+        vm.prank(carol);
+        tokenA.transfer(pairAddr, 1 ether);
+        vm.prank(carol);
+        vm.expectRevert(
+            abi.encodeWithSelector(VeriPair.ComplianceRejected.selector, CVI_FAIL, uint8(0))
+        );
+        pair.swap(0, 1, carol, new bytes(0));
+    }
+
+    function testDirectPairSwapVerifiedWorks() public {
+        // Same direct flow with a verified user must succeed.
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+
+        vm.prank(alice);
+        tokenA.transfer(pairAddr, 1 ether);
+        // The pair sorts token0/token1 by address, so capture BOTH balances and
+        // assert the total increased by exactly the 1 wei output.
+        uint256 totalBefore = tokenA.balanceOf(alice) + tokenB.balanceOf(alice);
+        vm.prank(alice);
+        pair.swap(0, 1, alice, new bytes(0));
+        assertEq(
+            tokenA.balanceOf(alice) + tokenB.balanceOf(alice),
+            totalBefore + 1,
+            "verified direct swap delivered exactly 1 wei"
+        );
+    }
+
+    // ============================================================
+    // NEW-02: first-depositor one-sided donation drain
+    // ============================================================
+
+    function testFirstDepositorDrainPoC() public {
+        // Attacker (alice) seeds the minimal first deposit: 1001 + 1001 wei.
+        address pairAddr = factory.createPair(address(tokenA), address(tokenB));
+        VeriPair pair = VeriPair(pairAddr);
+        vm.prank(alice);
+        (, , uint256 attackerLp) = router.addLiquidity(
+            address(tokenA), address(tokenB), 1001, 1001, 0, 0, alice, block.timestamp + 1 hours
+        );
+        assertEq(attackerLp, 1, "attacker mints 1 LP");
+
+        // Victim (bob) makes a one-sided donation: pure tokenA, no LP.
+        vm.prank(bob);
+        tokenA.transfer(pairAddr, 1_000_000);
+
+        // Attacker exits via the atomic exitLiquidity (pulls HER OWN 1 LP and
+        // burns exactly that — the old park-then-burn is gone). Her share of
+        // the now-inflated reserves is still bounded by the MINIMUM_LIQUIDITY
+        // lock: 1 of 1001 totalSupply cannot extract the donation.
+        uint256 aliceABefore = tokenA.balanceOf(alice);
+        uint256 aliceBBefore = tokenB.balanceOf(alice);
+        vm.prank(alice);
+        (uint256 out0, uint256 out1) = pair.exitLiquidity(attackerLp, 0, 0, alice);
+
+        uint256 extracted = (tokenA.balanceOf(alice) - aliceABefore) + (tokenB.balanceOf(alice) - aliceBBefore);
+        // Deposited 1001 + 1001 = 2002 wei. With the permanent MINIMUM_LIQUIDITY
+        // lock the attacker holds 1 of 1001 totalSupply -> cannot extract more.
+        assertLe(extracted, 2002, "attacker cannot extract more than they deposited");
+    }
+
     function testAddLiquidityRevertsUnverifiedRecipient() public {
         factory.createPair(address(tokenA), address(tokenB));
         // LP recipient = carol (unverified) -> pair.mint(to) rejects.
@@ -418,6 +505,166 @@ contract VeriFlowTest is Test {
             abi.encodeWithSelector(VeriPair.ComplianceRejected.selector, "CVI verification failed: LP recipient not verified", uint8(0))
         );
         pair.transfer(carol, lp / 2);
+    }
+
+    // ============================================================
+    // NEW-03: revoked-user exit path — burn-to-self is allowed, but
+    // swapping and transferring LP are not.
+    // ============================================================
+
+    function testRevokedUserCanBurnToSelfButNotSwapOrTransfer() public {
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+        uint256 lp = pair.balanceOf(alice);
+        assertGt(lp, 0, "alice holds LP before revocation");
+
+        // Simulate Cleanverse CVI revocation (attestation revoked).
+        cvi.setVerified(alice, false);
+        assertFalse(cvi.isVerified(alice), "alice is now revoked");
+
+        // 1. Revoked user CANNOT swap.
+        address[] memory path = new address[](2);
+        path[0] = address(tokenA);
+        path[1] = address(tokenB);
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(VeriRouter.ComplianceRejected.selector, CVI_FAIL, uint8(0))
+        );
+        router.swapExactTokensForTokens(1 ether, 1, path, alice, block.timestamp + 1 hours);
+
+        // 2. Revoked user CANNOT transfer LP to another wallet.
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VeriPair.ComplianceRejected.selector,
+                "CVI verification failed: LP sender not verified",
+                uint8(0)
+            )
+        );
+        pair.transfer(bob, lp / 2);
+
+        // 3. Revoked user CAN exit atomically via exitLiquidity (NEW-13): the
+        //    pair pulls HER OWN LP and burns exactly that inside one call — the
+        //    underlying assets are redeemed to the same wallet. The old
+        //    two-step (park then burn) is deprecated.
+        uint256 aliceTokenABefore = tokenA.balanceOf(alice);
+        uint256 aliceTokenBBefore = tokenB.balanceOf(alice);
+
+        vm.prank(alice);
+        (uint256 out0, uint256 out1) = pair.exitLiquidity(lp, 0, 0, alice);
+
+        assertGt(out0, 0, "atomic exit redeemed tokenA");
+        assertGt(out1, 0, "atomic exit redeemed tokenB");
+        assertEq(pair.balanceOf(alice), 0, "alice's LP fully burned");
+        assertEq(tokenA.balanceOf(alice), aliceTokenABefore + out0, "tokenA redeemed to alice");
+        assertEq(tokenB.balanceOf(alice), aliceTokenBBefore + out1, "tokenB redeemed to alice");
+    }
+
+    // ============================================================
+    // NEW-13: atomic revoked-user exit — front-run proof.
+    // The old two-step exit (tx1: park LP in the pair, tx2: burn) let any
+    // caller burn the pair's ENTIRE parked LP. Exit is now ONE transaction via
+    // exitLiquidity(); direct pair.burn() is router-only.
+    // ============================================================
+
+    function testExitFrontRunFails() public {
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+        uint256 aliceLp = pair.balanceOf(alice);
+        assertGt(aliceLp, 0, "alice holds LP");
+
+        // Revoke alice — she still holds LP from before revocation.
+        cvi.setVerified(alice, false);
+
+        // Alice starts the OLD two-step exit: parks her LP in the pair (tx1).
+        vm.prank(alice);
+        pair.transfer(pairAddr, aliceLp);
+        assertEq(pair.balanceOf(pairAddr), aliceLp, "LP parked in pair");
+
+        // Attacker (bob) front-runs tx2: direct pair.burn must revert — the
+        // burn entry is locked to the router now.
+        vm.prank(bob);
+        vm.expectRevert(bytes("FORBIDDEN"));
+        pair.burn(bob);
+
+        // Bob cannot sweep alice's parked LP via exitLiquidity either: it pulls
+        // ONLY HIS OWN LP (balanceOf(msg.sender)), never the parked balance.
+        vm.prank(bob);
+        (, , uint256 bobLp) = router.addLiquidity(
+            address(tokenA), address(tokenB), 2 ether, 2 ether, 0, 0, bob, block.timestamp + 1 hours
+        );
+        uint256 bobABefore = tokenA.balanceOf(bob);
+        uint256 bobBBefore = tokenB.balanceOf(bob);
+        vm.prank(bob);
+        (uint256 out0, uint256 out1) = pair.exitLiquidity(bobLp, 0, 0, bob);
+
+        assertGt(out0, 0, "bob redeemed tokenA");
+        assertGt(out1, 0, "bob redeemed tokenB");
+        // Bob's gain is bounded by his own contribution (2 ether each + fee share).
+        assertLe(tokenA.balanceOf(bob) - bobABefore, 2 ether + 1, "bob gained <= his own tokenA");
+        assertLe(tokenB.balanceOf(bob) - bobBBefore, 2 ether + 1, "bob gained <= his own tokenB");
+        // Alice's parked LP is untouched by bob's exit — nobody can burn it.
+        assertEq(pair.balanceOf(pairAddr), aliceLp, "parked LP untouched");
+    }
+
+    function testRevokedUserAtomicExitWorks() public {
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+        uint256 lp = pair.balanceOf(alice);
+        assertGt(lp, 0, "alice holds LP");
+
+        (uint112 r0, uint112 r1, ) = pair.getReserves();
+        uint256 totalSupply = pair.totalSupply();
+        uint256 expected0 = (lp * uint256(r0)) / totalSupply;
+        uint256 expected1 = (lp * uint256(r1)) / totalSupply;
+        assertGt(expected0, 0, "expected tokenA share > 0");
+        assertGt(expected1, 0, "expected tokenB share > 0");
+
+        cvi.setVerified(alice, false); // revoke alice
+
+        // Mins enforced: ask for more than the share -> revert.
+        vm.prank(alice);
+        vm.expectRevert(bytes("INSUFFICIENT_A_AMOUNT"));
+        pair.exitLiquidity(lp, expected0 + 1, 0, alice);
+
+        // One-tx exit: pull + burn exactly `lp` + redeem to self.
+        uint256 aliceABefore = tokenA.balanceOf(alice);
+        uint256 aliceBBefore = tokenB.balanceOf(alice);
+        vm.prank(alice);
+        (uint256 out0, uint256 out1) = pair.exitLiquidity(lp, expected0, expected1, alice);
+
+        assertEq(out0, expected0, "tokenA amount matches share");
+        assertEq(out1, expected1, "tokenB amount matches share");
+        assertEq(pair.balanceOf(alice), 0, "alice LP fully burned");
+        assertEq(pair.balanceOf(pairAddr), 0, "no parked LP remains");
+        assertEq(tokenA.balanceOf(alice), aliceABefore + expected0, "tokenA redeemed to alice");
+        assertEq(tokenB.balanceOf(alice), aliceBBefore + expected1, "tokenB redeemed to alice");
+    }
+
+    function testRouterRemoveLiquidityStillWorks() public {
+        // Regression: the router path (transferFrom + burn in ONE router tx)
+        // still works after burn is locked to the router.
+        address pairAddr = _seedPool();
+        VeriPair pair = VeriPair(pairAddr);
+        uint256 lp = pair.balanceOf(alice);
+        assertGt(lp, 0, "alice holds LP");
+
+        vm.prank(alice);
+        pair.approve(address(router), type(uint256).max);
+        uint256 aliceABefore = tokenA.balanceOf(alice);
+        uint256 aliceBBefore = tokenB.balanceOf(alice);
+        vm.prank(alice);
+        (uint256 amtA, uint256 amtB) = router.removeLiquidity(
+            address(tokenA), address(tokenB), lp, 0, 0, alice, block.timestamp + 1 hours
+        );
+
+        assertGt(amtA, 0, "removed tokenA");
+        assertGt(amtB, 0, "removed tokenB");
+        assertEq(pair.balanceOf(alice), 0, "alice LP fully removed");
+        assertEq(tokenA.balanceOf(alice), aliceABefore + amtA, "tokenA returned");
+        assertEq(tokenB.balanceOf(alice), aliceBBefore + amtB, "tokenB returned");
+        // MINIMUM_LIQUIDITY lock untouched (dead-address shares persist).
+        assertEq(pair.balanceOf(0x000000000000000000000000000000000000dEaD), 1000, "dead lock intact");
     }
 
     // ============================================================

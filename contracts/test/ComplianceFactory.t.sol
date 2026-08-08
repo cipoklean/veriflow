@@ -101,6 +101,9 @@ contract ComplianceFactoryTest is Test {
         tokenA = new MockERC20("Token A", "TKA", 18, 1_000_000 ether);
         tokenB = new MockERC20("Token B", "TKB", 18, 1_000_000 ether);
         router = new VeriRouter(address(factory), address(weth), hook);
+        // NEW-01: factory must know the router so pairs exempt router-mediated
+        // calls from the CVI(msg.sender) check. Router stays CVI-unregistered.
+        factory.setRouter(address(router));
 
         cva.registerAsset(address(tokenA), address(tokenA), "TKA", "Token A", 18, false, address(0), address(0));
         cva.registerAsset(address(tokenB), address(tokenB), "TKB", "Token B", 18, false, address(0), address(0));

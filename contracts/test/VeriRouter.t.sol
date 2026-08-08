@@ -95,6 +95,9 @@ contract VeriRouterTest is Test {
         tokenA = new MockERC20("Token A", "TKA", 18, 1_000_000 ether);
         tokenB = new MockERC20("Token B", "TKB", 18, 1_000_000 ether);
         router = new VeriRouter(address(factory), address(weth), hook);
+        // NEW-01: factory must know the router so pairs exempt router-mediated
+        // calls from the CVI(msg.sender) check. Router stays CVI-unregistered.
+        factory.setRouter(address(router));
 
         // CVA: all three assets must be verified for pairs to be created.
         cva.registerAsset(address(tokenA), address(tokenA), "TKA", "Token A", 18, false, address(0), address(0));
@@ -282,6 +285,11 @@ contract VeriRouterTest is Test {
     }
 
     function testMultiHopSwap() public {
+        // NEW-11 regression: the router is deliberately NOT CVI-registered (see
+        // setUp) — multi-hop swaps must still work because the pair checks the
+        // ACTUAL user (`to`), never msg.sender (the router).
+        assertFalse(cvi.isVerified(address(router)), "router must stay unregistered");
+
         address pairAB = factory.createPair(address(tokenA), address(tokenB));
         address pairBW = factory.createPair(address(tokenB), address(weth));
 

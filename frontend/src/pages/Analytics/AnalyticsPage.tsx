@@ -1,10 +1,9 @@
-import { useAccount } from 'wagmi';
-import { BarChart2, DollarSign, Layers, Fingerprint, Shield, TrendingUp, Activity } from 'lucide-react';
+import { DollarSign, Layers, Fingerprint, Shield, TrendingUp, Activity } from 'lucide-react';
 import { cn, formatNumber, formatCurrency } from '@/lib/utils';
 import { useProtocolStats, useAllPools, useVerifiedAssets } from '@/contracts/useVeriFlow';
 
 export function AnalyticsPage() {
-  const { isConnected } = useAccount();
+  // FE-02: analytics are public chain data — no wallet gate.
 
   // Real on-chain reads: pool reserves + registry counts. No mock data.
   const { tvl, poolCount, verifiedAssetCount, isLoading: statsLoading } = useProtocolStats();
@@ -12,21 +11,6 @@ export function AnalyticsPage() {
   const { assets, isLoading: assetsLoading } = useVerifiedAssets();
 
   const loading = statsLoading || poolsLoading || assetsLoading;
-
-  if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="card-hover py-16 text-center">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-teal/10">
-            <BarChart2 className="h-8 w-8 text-accent-teal" />
-          </div>
-          <h2 className="mb-2 text-xl font-semibold text-text-primary">Connect Wallet for Analytics</h2>
-          <p className="mb-6 text-text-muted">Connect your wallet to view live protocol analytics</p>
-          <a href="/#wallet" className="btn-primary">Connect Wallet</a>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">

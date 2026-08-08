@@ -15,6 +15,7 @@ import {IComplianceHook} from "../src/interfaces/IComplianceHook.sol";
 import {ICVIRegistry} from "../src/interfaces/ICVIRegistry.sol";
 import {ICVARegistry} from "../src/interfaces/ICVARegistry.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {VeriFlowScriptChecks} from "./VeriFlowScriptChecks.sol";
 
 /**
  * @title VeriFlow Deploy Script
@@ -29,6 +30,8 @@ contract DeployVeriFlow is Script {
     address GOVERNOR;
     address CVI_REGISTRY_ADDRESS;
     address CVA_REGISTRY_ADDRESS;
+    // NEW-14: resolved feeToSetter (env FEE_TO_SETTER, else governor key).
+    address FEE_TO_SETTER;
 
     // ============================================================
     // Deployed Contract Addresses
@@ -81,6 +84,9 @@ contract DeployVeriFlow is Script {
         string memory governorStr = Vm(CHEATCODE_ADDRESS).envString("GOVERNOR");
         string memory cviStr = Vm(CHEATCODE_ADDRESS).envString("CVI_REGISTRY_ADDRESS");
         string memory cvaStr = Vm(CHEATCODE_ADDRESS).envString("CVA_REGISTRY_ADDRESS");
+        // NEW-14: FEE_TO_SETTER comes from env; when unset it defaults to the
+        // governor key — NEVER to an anvil default account (asserted below).
+        string memory feeToSetterStr = Vm(CHEATCODE_ADDRESS).envOr("FEE_TO_SETTER", string(""));
 
         WETH_ADDRESS = bytes(wethStr).length > 0 ? parseAddress(wethStr) : address(0);
         GOVERNOR = bytes(governorStr).length > 0 ? parseAddress(governorStr) : address(0);
@@ -94,6 +100,14 @@ contract DeployVeriFlow is Script {
                 GOVERNOR = Vm(CHEATCODE_ADDRESS).addr(deployerPkForGov);
             }
         }
+
+        // NEW-14: feeToSetter = env FEE_TO_SETTER, else the governor key. The
+        // assertion reverts the whole deploy if the resolved address is one of
+        // the 10 well-known anvil default accounts.
+        FEE_TO_SETTER = bytes(feeToSetterStr).length > 0 ? parseAddress(feeToSetterStr) : GOVERNOR;
+        require(FEE_TO_SETTER != address(0), "FEE_TO_SETTER resolved to zero");
+        VeriFlowScriptChecks.assertNotAnvilDefault(FEE_TO_SETTER);
+        console2.log("feeToSetter target:", FEE_TO_SETTER);
 
         uint256 deployerPk = Vm(CHEATCODE_ADDRESS).envUint("PRIVATE_KEY");
         vmSafe.startBroadcast(deployerPk);
@@ -148,6 +162,14 @@ contract DeployVeriFlow is Script {
         veriFactory = new VeriFactory(IComplianceHook(address(complianceHook)));
         console2.log("Deployed VeriFactory at:", address(veriFactory));
 
+        // NEW-14: set feeToSetter while the deployer is still the factory owner
+        // (before the ownership transfer below). FEE_TO_SETTER was resolved and
+        // asserted (not an anvil default) above.
+        if (veriFactory._feeToSetter() != FEE_TO_SETTER) {
+            veriFactory.setFeeToSetter(FEE_TO_SETTER);
+            console2.log("Factory feeToSetter set to:", FEE_TO_SETTER);
+        }
+
         if (GOVERNOR != veriFactory.owner()) {
             veriFactory.transferOwnership(GOVERNOR);
             console2.log("Transferred VeriFactory ownership to:", GOVERNOR);
@@ -177,6 +199,16 @@ contract DeployVeriFlow is Script {
             IComplianceHook(address(complianceHook))
         );
         console2.log("Deployed VeriRouter at:", address(veriRouter));
+
+        // NEW-01: the factory must know the router so pairs exempt router-mediated
+        // calls from the CVI(msg.sender) check. Only possible while the deployer
+        // is still the factory owner (GOVERNOR == deployer default).
+        if (veriFactory.owner() == msg.sender) {
+            veriFactory.setRouter(address(veriRouter));
+            console2.log("Factory router set to:", address(veriRouter));
+        } else {
+            console2.log("WARN: factory owned by GOVERNOR - set router via Bootstrap");
+        }
 
         if (GOVERNOR != veriRouter.owner()) {
             veriRouter.transferOwnership(GOVERNOR);

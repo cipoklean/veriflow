@@ -1,14 +1,18 @@
 import type { Address } from 'viem';
 
-// Contract addresses - Deployed on Monad Testnet (Chain ID: 10143) 2026-08-07
+// Contract addresses - Deployed on Monad Testnet (Chain ID: 10143)
 // Governor (owner of Factory/Router/Hook): 0x51b0228bd9B8BF78CEDB11Cb485BA9F80cCf4655
+// NOTE: 2026-08-08 06:11 UTC redeploy with NEW-01/02/03/13 fixes (atomic
+// exitLiquidity + router-only burn) + NEW-14 feeToSetter=governor default;
+// addresses read from broadcast/DeployVeriFlow.s.sol/10143/run-latest.json
+// (single source). Pair (WMON/USDC): 0x2fD1F8B9184d4ed41CF5f1A7639847ADDe9314b7.
 export const CONTRACT_ADDRESSES = {
   monadTestnet: {
-    veriFactory: '0x059F2780132a1d5bb54E1cAab7675C8338124d71' as Address,
-    veriRouter: '0x75F74f18B126fc3f95AFe19BB367A9a6b3a5C7fC' as Address,
-    complianceHook: '0x7d59e809DB91270Dfd788956FA1E4d6E915F0E28' as Address,
-    cviRegistry: '0xD47a9c1F0F9f1dD79110c0e83eF0ac40DFBF25CF' as Address,
-    cvaRegistry: '0xC4A78F258fe5E97DD97C548BEAe237f202C4A37c' as Address,
+    veriFactory: '0x39950C3D2998662D882D47265C7AC587EC4f65B4' as Address,
+    veriRouter: '0xa39d25Db54d57f7A8193Ad6baEC12042E0988053' as Address,
+    complianceHook: '0xd3A2b6D1ace97721daB341CeF5B3ac0dB6DBe755' as Address,
+    cviRegistry: '0x5aa3C294b291d29aBF203c780C3C22dC43B21173' as Address,
+    cvaRegistry: '0x08f78faFD91A52C1dC8cDeC89252BA0c0C13Ac2B' as Address,
     weth: '0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541' as Address, // WMON (wrapped MON) - canonical Monad testnet (verified live 2026-08)
     usdc: '0x534b2f3A21130d7a60830c2Df862319e593943A3' as Address, // Circle USDC on Monad testnet
   },

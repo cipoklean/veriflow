@@ -4,7 +4,9 @@ import {
   useReadContracts,
   useWriteContract,
   useWaitForTransactionReceipt,
+  usePublicClient,
 } from 'wagmi';
+import { useEffect, useState } from 'react';
 import { decodeErrorResult, type Abi, type Address, formatUnits, zeroAddress } from 'viem';
 import { getContractAddresses, SUPPORTED_TOKENS } from './config';
 import VeriFactoryAbi from './abis/VeriFactory.json';
@@ -67,6 +69,7 @@ export function useAllPools() {
     abi: FACTORY_ABI,
     functionName: 'allPairsLength',
     chainId: MONAD_TESTNET,
+    query: { refetchInterval: 5000 },
   });
 
   const length = lengthData ? Number(lengthData) : 0;
@@ -99,6 +102,7 @@ export function useAllPools() {
   const { data: detailData, isLoading: detailsLoading } = useReadContracts({
     contracts: detailCalls,
     allowFailure: false,
+    query: { refetchInterval: 5000 },
   });
 
   const pools: PoolView[] = [];
@@ -266,4 +270,102 @@ export function useVeriWrite() {
   const { writeContract, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
   return { writeContract, txHash, isPending, isConfirming, isSuccess };
+}
+
+/** Decode a Swap event from a raw log (amounts are raw token units). */
+export interface SwapEvent {
+  txHash: Address;
+  sender: Address;
+  amount0In: bigint;
+  amount1In: bigint;
+  amount0Out: bigint;
+  amount1Out: bigint;
+  timestamp: number;
+}
+
+/**
+ * Read-only Swap-event feed for a pair (real on-chain logs, newest first).
+ * Used by the Dashboard trades feed + stat sparklines. NEVER fabricates data:
+ * when the chain has no events in the scanned window, returns an empty array
+ * so the UI shows the graceful empty state.
+ *
+ * NOTE: Monad testnet's public RPC caps eth_getLogs at a 100-block range, so
+ * this scans backward in 100-block chunks from the tip (up to SCAN_BLOCKS of
+ * history, stopping early once the requested count is found). Swaps older
+ * than the scan window are simply not shown — the feed is honest about that.
+ */
+export function usePairSwapEvents(pair: Address | undefined, limit = 20) {
+  const addrs = useVeriFlowAddresses();
+  const publicClient = usePublicClient();
+  const [events, setEvents] = useState<SwapEvent[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!pair || !publicClient) {
+      setEvents([]);
+      return;
+    }
+    const scan = async () => {
+      try {
+        const scanBlock = 100; // RPC cap for eth_getLogs range
+        const maxChunks = 10; // scan up to 1000 blocks back
+        const tip = await publicClient.getBlockNumber();
+        const found: SwapEvent[] = [];
+        for (let i = 0; i < maxChunks && found.length < limit; i++) {
+          const toBlock = tip - BigInt(i * scanBlock);
+          const fromBlock = toBlock - BigInt(scanBlock - 1);
+          if (fromBlock > toBlock) break;
+          try {
+            const logs = await publicClient.getLogs({
+              address: pair,
+              event: {
+                type: 'event',
+                name: 'Swap',
+                inputs: [
+                  { type: 'address', name: 'sender', indexed: true },
+                  { type: 'uint256', name: 'amount0In', indexed: false },
+                  { type: 'uint256', name: 'amount1In', indexed: false },
+                  { type: 'uint256', name: 'amount0Out', indexed: false },
+                  { type: 'uint256', name: 'amount1Out', indexed: false },
+                  { type: 'address', name: 'to', indexed: true },
+                ],
+              },
+              fromBlock,
+              toBlock,
+            });
+            for (const l of logs.reverse()) {
+              found.push({
+                txHash: l.transactionHash,
+                sender: l.args.sender ?? addrs.veriRouter,
+                amount0In: l.args.amount0In ?? 0n,
+                amount1In: l.args.amount1In ?? 0n,
+                amount0Out: l.args.amount0Out ?? 0n,
+                amount1Out: l.args.amount1Out ?? 0n,
+                timestamp: Number(l.blockNumber ?? 0n),
+              });
+            }
+          } catch {
+            // a chunk can fail (RPC flake); keep scanning older chunks
+          }
+        }
+        if (cancelled) return;
+        setEvents(prev => {
+          const next = found.slice(0, limit);
+          // keep newest-first ordering; identical arrays skip re-render churn
+          if (prev.length === next.length && prev.every((e, i) => e.txHash === next[i].txHash)) return prev;
+          return next;
+        });
+      } catch {
+        if (!cancelled) setEvents([]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+    void scan();
+    const timer = setInterval(scan, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [pair, publicClient, addrs.veriRouter, limit]);
+
+  return { events, isLoading };
 }

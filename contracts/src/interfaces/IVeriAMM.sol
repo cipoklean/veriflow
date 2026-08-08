@@ -54,6 +54,14 @@ interface IVeriPair {
 
     function mint(address to) external returns (uint256 liquidity);
     function burn(address to) external returns (uint256 amount0, uint256 amount1);
+    // NEW-13: atomic one-tx exit — pulls the caller's own LP, burns exactly
+    // `liquidity`, redeems underlying to `to` (CVI-required unless to == caller).
+    function exitLiquidity(
+        uint256 liquidity,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        address to
+    ) external returns (uint256 amount0, uint256 amount1);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
     function skim(address to) external;
     function sync() external;
@@ -78,6 +86,8 @@ interface IVeriFactory {
     function allPairs(uint256 index) external view returns (address);
     function allPairsLength() external view returns (uint256);
     function isPair(address pair) external view returns (bool);
+    function router() external view returns (address);
+    function setRouter(address router) external;
     function createPair(address tokenA, address tokenB) external returns (address pair);
     function setFeeTo(address feeTo) external;
     function setFeeToSetter(address feeToSetter) external;

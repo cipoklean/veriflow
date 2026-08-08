@@ -6,6 +6,8 @@ interface Toast {
   description?: string;
   type?: 'default' | 'success' | 'error' | 'warning';
   duration?: number;
+  txHash?: string;
+  action?: { label: string; onClick: () => void };
 }
 
 interface ToastContextType {
@@ -19,9 +21,9 @@ const ToastContext = createContext<ToastContextType | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const toast = useCallback(({ title, description, type = 'default', duration = 5000 }: Omit<Toast, 'id'>) => {
+  const toast = useCallback(({ title, description, type = 'default', duration = 5000, txHash, action }: Omit<Toast, 'id'>) => {
     const id = Math.random().toString(36).slice(2);
-    setToasts(prev => [...prev, { id, title, description, type, duration }]);
+    setToasts(prev => [...prev, { id, title, description, type, duration, txHash, action }]);
     return id;
   }, []);
 

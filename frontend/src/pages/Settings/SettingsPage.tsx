@@ -1,14 +1,33 @@
 import { useState } from 'react';
-import { useAccount } from 'wagmi';
-import { Settings2, ShieldCheck, Network, SlidersHorizontal, Clock, Coins } from 'lucide-react';
+import { useAccount, useChainId, useReadContract } from 'wagmi';
+import { motion } from 'framer-motion';
+import { Settings2, ShieldCheck, Network, SlidersHorizontal, Clock, Coins, Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getContractAddresses } from '@/contracts/config';
+import { useWalletVerified } from '@/contracts/useVeriFlow';
+import ComplianceHookAbi from '@/contracts/abis/ComplianceHook.json';
 
 export function SettingsPage() {
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const contractAddresses = getContractAddresses(chainId);
   const [slippage, setSlippage] = useState('0.5');
   const [deadline, setDeadline] = useState('20');
   const [autoApprove, setAutoApprove] = useState(true);
   const [testnet, setTestnet] = useState(true);
+
+  // NEW-08: live compliance state — CVI verification of the connected wallet
+  // and the compliance hook's paused state are read on-chain (no hardcoded
+  // "Verified"/"Enforced" badges).
+  const { isVerified, isLoading: isVerifying } = useWalletVerified(address);
+  const { data: hookPaused, isLoading: isPausedLoading } = useReadContract({
+    address: contractAddresses.complianceHook,
+    abi: ComplianceHookAbi,
+    functionName: 'paused',
+    chainId: 10143,
+    query: { enabled: isConnected },
+  });
+  const enforcementActive = !hookPaused;
 
   if (!isConnected) {
     return (
@@ -42,14 +61,13 @@ export function SettingsPage() {
       onClick={() => onChange(!checked)}
       className={cn(
         'relative h-6 w-11 rounded-full transition-colors duration-200',
-        checked ? 'bg-accent-teal' : 'bg-border-secondary'
+        checked ? 'bg-accent-teal shadow-[0_0_14px_rgba(45,212,191,0.35)]' : 'bg-border-secondary'
       )}
     >
-      <span
-        className={cn(
-          'absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200',
-          checked && 'translate-x-5'
-        )}
+      <motion.span
+        className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow"
+        animate={{ x: checked ? 20 : 0 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
       />
     </button>
   );
@@ -150,17 +168,44 @@ export function SettingsPage() {
           </div>
         </div>
         <div className="divide-y divide-border-subtle">
-          <Row label="CVI · Identity verification" hint="Your address is verified">
-            <span className="flex items-center gap-1.5 text-xs font-medium text-accent-green">
-              <Coins className="h-3.5 w-3.5" aria-hidden="true" />
-              Verified
-            </span>
+          <Row label="CVI · Identity verification" hint={isVerified ? 'Your address is verified' : 'Your address is not verified'}>
+            {isVerifying ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Checking
+              </span>
+            ) : isVerified ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-accent-green">
+                <Coins className="h-3.5 w-3.5" aria-hidden="true" />
+                Verified
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-warning-primary">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                Not Verified
+              </span>
+            )}
           </Row>
-          <Row label="CVA · Asset authenticity" hint="All pools are registered assets">
-            <span className="flex items-center gap-1.5 text-xs font-medium text-accent-green">
-              <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-              Enforced
-            </span>
+          <Row
+            label="CVA · Asset authenticity"
+            hint={enforcementActive ? 'All pools are registered assets' : 'Compliance enforcement is paused'}
+          >
+            {isPausedLoading ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Checking
+              </span>
+            ) : enforcementActive ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-accent-green">
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                Enforced
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-warning-primary">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                Paused
+              </span>
+            )}
           </Row>
         </div>
       </section>

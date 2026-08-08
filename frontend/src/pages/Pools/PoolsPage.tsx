@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useNavigate } from 'react-router-dom';
 import { formatUnits } from 'viem';
+import { motion } from 'framer-motion';
 import { ChevronDown, ChevronUp, Loader2, Zap, TrendingUp, DollarSign, Shield, Plus } from 'lucide-react';
 import { cn, formatNumber, formatAddress, formatCurrency } from '@/lib/utils';
 import { useAllPools, useSupportedTokens, tokenMetaByAddress } from '@/contracts/useVeriFlow';
 import { TokenIcon } from '@/components/ui/TokenIcon';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 interface Pool {
   token0: string;
@@ -25,7 +27,8 @@ interface Pool {
 type SortKey = 'token0Symbol' | 'tvl' | 'volume24h' | 'feeAPR';
 
 export function PoolsPage() {
-  const { isConnected } = useAccount();
+  // FE-02: pools are public chain data — no wallet gate.
+  const navigate = useNavigate();
   const tokens = useSupportedTokens();
   const { pools: livePools, isLoading: loading } = useAllPools();
 
@@ -70,12 +73,20 @@ export function PoolsPage() {
     }));
   };
 
-  const SortArrow = ({ col }: { col: SortKey }) =>
-    sortConfig.key === col ? (
-      sortConfig.direction === 'desc'
-        ? <ChevronDown className="ml-1 inline h-3.5 w-3.5" aria-hidden="true" />
-        : <ChevronUp className="ml-1 inline h-3.5 w-3.5" aria-hidden="true" />
-    ) : null;
+  const SortArrow = ({ col }: { col: SortKey }) => (
+    <motion.span
+      key={`${col}-${sortConfig.key === col ? sortConfig.direction : 'none'}`}
+      initial={{ opacity: 0, y: 3 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15, ease: 'easeOut' }}
+      className="inline-flex"
+      aria-hidden="true"
+    >
+      {sortConfig.key === col ? (
+        sortConfig.direction === 'desc' ? <ChevronDown className="ml-1 h-3.5 w-3.5" /> : <ChevronUp className="ml-1 h-3.5 w-3.5" />
+      ) : null}
+    </motion.span>
+  );
 
   const stats = [
     { label: 'Total Pools', value: pools.length, icon: Zap, tone: 'text-accent-teal bg-accent-teal/10' },
@@ -84,20 +95,8 @@ export function PoolsPage() {
     { label: 'Avg APR', value: pools.length > 0 ? `${(pools.reduce((sum, p) => sum + p.feeAPR, 0) / pools.length).toFixed(1)}%` : '-', icon: Shield, tone: 'text-accent-teal bg-accent-teal/10' },
   ];
 
-  if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="card-hover py-16 text-center">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-teal/10">
-            <Shield className="h-8 w-8 text-accent-teal" />
-          </div>
-          <h2 className="mb-2 text-xl font-semibold text-text-primary">Connect Wallet to View Pools</h2>
-          <p className="mb-6 text-text-muted">Connect your wallet to browse and manage liquidity pools</p>
-          <a href="/#wallet" className="btn-primary">Connect Wallet</a>
-        </div>
-      </div>
-    );
-  }
+  // FE-02: pools are public chain data — no connect gate. Actions (Create Pool,
+  // Manage) still route to /liquidity where the wallet gate applies.
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -107,7 +106,7 @@ export function PoolsPage() {
           <h1 className="font-display text-2xl font-bold text-text-primary">Pools</h1>
           <p className="mt-1 text-text-muted">Compliant liquidity pools on Monad</p>
         </div>
-        <button className="btn-secondary gap-2" disabled>
+        <button className="btn-secondary gap-2" onClick={() => navigate('/liquidity')}>
           <Plus className="h-4 w-4" />
           Create Pool
         </button>
@@ -142,7 +141,7 @@ export function PoolsPage() {
             <Zap className="mx-auto mb-4 h-12 w-12 text-border-secondary" />
             <h3 className="mb-2 text-lg font-medium text-text-primary">No pools found</h3>
             <p className="mb-6 text-text-muted">Be the first to create a pool on VeriFlow</p>
-            <button className="btn-primary gap-2" disabled>
+            <button className="btn-primary gap-2" onClick={() => navigate('/liquidity')}>
               <Plus className="h-4 w-4" />
               Create Pool
             </button>
@@ -156,13 +155,13 @@ export function PoolsPage() {
                     Pair <SortArrow col="token0Symbol" />
                   </th>
                   <th className="cursor-pointer transition-colors hover:text-text-primary" onClick={() => handleSort('tvl')}>
-                    TVL <SortArrow col="tvl" />
+                    <Tooltip content="Total value locked in this pool, valued in MON" placement="top">TVL</Tooltip> <SortArrow col="tvl" />
                   </th>
                   <th className="cursor-pointer transition-colors hover:text-text-primary" onClick={() => handleSort('volume24h')}>
                     24h Volume <SortArrow col="volume24h" />
                   </th>
                   <th className="cursor-pointer transition-colors hover:text-text-primary" onClick={() => handleSort('feeAPR')}>
-                    Fee APR <SortArrow col="feeAPR" />
+                    <Tooltip content="Annualized yield from swap fees on this pool" placement="top">Fee APR</Tooltip> <SortArrow col="feeAPR" />
                   </th>
                   <th>Reserves</th>
                   <th className="text-right">Actions</th>
@@ -176,7 +175,9 @@ export function PoolsPage() {
                         <TokenIcon symbol={pool.token0Symbol} size="sm" />
                         <div>
                           <div className="font-medium text-text-primary">{pool.token0Symbol}/{pool.token1Symbol}</div>
-                          <div className="font-mono text-xs text-text-muted">{formatAddress(pool.address)}</div>
+                          <Tooltip content={(copied: boolean) => (copied ? 'Copied!' : pool.address)} copyable copyText={pool.address} placement="top">
+                            <span className="cursor-pointer font-mono text-xs text-text-muted underline decoration-dotted underline-offset-2">{formatAddress(pool.address)}</span>
+                          </Tooltip>
                         </div>
                       </div>
                     </td>
@@ -188,7 +189,7 @@ export function PoolsPage() {
                       {formatNumber(Number(formatUnits(pool.reserve1, pool.token1Decimals)))} {pool.token1Symbol}
                     </td>
                     <td className="text-right">
-                      <button className="btn-ghost gap-1 text-xs">
+                      <button className="btn-ghost gap-1 text-xs" onClick={() => navigate('/liquidity')}>
                         <Zap className="h-3.5 w-3.5" />
                         Manage
                       </button>

@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { LayoutDashboard, ArrowLeftRight, Zap, Droplets, BarChart3, Settings, BookOpen, Code, X } from 'lucide-react';
 import { NavItem } from './NavItem';
+import { Tooltip } from '@/components/ui/Tooltip';
 import logo from '@/assets/veriflow-logo.png';
 
 const navigation = [
@@ -39,32 +40,34 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onCloseMobile }: Side
   const footer = (
     <div className="p-3 border-t border-border-subtle">
       <div className={cn('space-y-1.5', collapsed && 'flex flex-col items-center')}>
-        <a
-          href="https://docs.veriflow.xyz"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            'flex items-center gap-3 rounded-full px-3.5 py-2.5 text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors text-sm',
-            collapsed && 'justify-center px-0'
-          )}
-          title={collapsed ? 'Documentation' : undefined}
-        >
-          <BookOpen className="h-[18px] w-[18px] flex-shrink-0" />
-          {!collapsed && <span>Documentation</span>}
-        </a>
-        <a
-          href="https://github.com/veriflow"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={cn(
-            'flex items-center gap-3 rounded-full px-3.5 py-2.5 text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors text-sm',
-            collapsed && 'justify-center px-0'
-          )}
-          title={collapsed ? 'GitHub' : undefined}
-        >
-          <Code className="h-[18px] w-[18px] flex-shrink-0" />
-          {!collapsed && <span>GitHub</span>}
-        </a>
+        <Tooltip content="Coming soon" placement="right">
+          <a
+            href="#"
+            aria-disabled="true"
+            className={cn(
+              'flex items-center gap-3 rounded-full px-3.5 py-2.5 text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors text-sm cursor-not-allowed',
+              collapsed && 'justify-center px-0'
+            )}
+            title={collapsed ? 'Documentation' : undefined}
+          >
+            <BookOpen className="h-[18px] w-[18px] flex-shrink-0" />
+            {!collapsed && <span>Documentation</span>}
+          </a>
+        </Tooltip>
+        <Tooltip content="Coming soon" placement="right">
+          <a
+            href="#"
+            aria-disabled="true"
+            className={cn(
+              'flex items-center gap-3 rounded-full px-3.5 py-2.5 text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors text-sm cursor-not-allowed',
+              collapsed && 'justify-center px-0'
+            )}
+            title={collapsed ? 'GitHub' : undefined}
+          >
+            <Code className="h-[18px] w-[18px] flex-shrink-0" />
+            {!collapsed && <span>GitHub</span>}
+          </a>
+        </Tooltip>
       </div>
     </div>
   );

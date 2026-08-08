@@ -175,8 +175,16 @@ contract VeriPair is IVeriPair, ERC20, Ownable2Step, Pausable, ReentrancyGuard {
     // ============================================================
 
     function mint(address to) external override nonReentrant returns (uint256 liquidity) {
-        // H-05: check the ACTUAL user (LP recipient `to`), not msg.sender (router).
-        _checkComplianceAddLiquidity(to);
+        // NEW-01: enforce CVI(msg.sender) UNLESS msg.sender == router (a direct
+        // caller — e.g. an unverified user — is always checked); enforce
+        // CVI(to) unless isPair(to).
+        address routerAddr = IVeriFactory(factory).router();
+        if (msg.sender != routerAddr) {
+            _checkComplianceAddLiquidity(msg.sender);
+        }
+        if (!IVeriFactory(factory).isPair(to)) {
+            _checkComplianceAddLiquidity(to);
+        }
         (uint112 _reserve0, uint112 _reserve1, ) = this.getReserves();
         uint256 balance0 = IERC20(token0).balanceOf(address(this));
         uint256 balance1 = IERC20(token1).balanceOf(address(this));
@@ -189,12 +197,13 @@ contract VeriPair is IVeriPair, ERC20, Ownable2Step, Pausable, ReentrancyGuard {
         if (_totalSupply == 0) {
             uint256 product = amount0 * amount1;
             liquidity = Math.sqrt(product) - MINIMUM_LIQUIDITY;
-            // Canonical Uniswap V2 locks MINIMUM_LIQUIDITY at the zero address.
-            // OZ v5 `_mint` rejects zero-address recipients, so mint to the pair
-            // itself and burn immediately: net effect is identical — 1000 LP units
-            // destroyed and permanently unclaimable.
-            _mint(address(this), MINIMUM_LIQUIDITY);
-            _burn(address(this), MINIMUM_LIQUIDITY);
+            // NEW-02: PERMANENT lock at the dead address. The old
+            // mint-to-self-then-burn was a NET NO-OP (supply +1000 then -1000,
+            // ending at the same totalSupply) and re-enabled the first-depositor
+            // one-sided donation drain. OZ v5 forbids `_mint` to address(0), so
+            // use the canonical 0xdEaD burn address — those 1000 shares stay in
+            // totalSupply forever and can never be withdrawn.
+            _mint(0x000000000000000000000000000000000000dEaD, MINIMUM_LIQUIDITY);
         } else {
             liquidity = (amount0 * _totalSupply) / _reserve0;
             uint256 liquidityB = (amount1 * _totalSupply) / _reserve1;
@@ -214,19 +223,74 @@ contract VeriPair is IVeriPair, ERC20, Ownable2Step, Pausable, ReentrancyGuard {
     // Burn (Remove Liquidity)
     // ============================================================
 
+    /**
+     * @notice Router-only burn entry: burns the LP the router just parked in
+     * this same transaction (removeLiquidity / removeLiquidityETH).
+     * @dev NEW-13: direct burns by arbitrary users REVERT ("FORBIDDEN").
+     * The old two-step exit (tx1: park LP in the pair, tx2: burn) is
+     * deprecated — it let any caller burn the pair's ENTIRE parked LP and
+     * steal a revoked user's parked shares. Users exit in ONE transaction via
+     * exitLiquidity() (see below); the router path stays atomic because the
+     * router parks LP and burns it inside a single tx.
+     */
     function burn(address to) external override nonReentrant returns (uint256 amount0, uint256 amount1) {
-        // H-05: check the ACTUAL user (token recipient `to`), not msg.sender (router).
-        // Self-delivery (removeLiquidityETH burns to the router, which already
-        // checked the user at router level) is skipped.
+        require(msg.sender == IVeriFactory(factory).router(), "FORBIDDEN");
+
+        // H-05: check the ACTUAL user (token recipient `to`), not msg.sender
+        // (router). Self-delivery (removeLiquidityETH burns to the router,
+        // which already checked the user at router level) is skipped.
         if (to != msg.sender) {
             _checkComplianceRemoveLiquidity(to);
         }
+        (amount0, amount1) = _burnLiquidity(balanceOf(address(this)), to);
+    }
+
+    /**
+     * @notice Atomic one-transaction exit for LP holders — including revoked
+     * users. Pulls the caller's OWN LP into the pair, burns exactly
+     * `liquidity`, and redeems the underlying assets to `to` — all in one call,
+     * so there is no parked balance for anyone to front-run.
+     * @dev NEW-13: the pair NEVER reads the parked balance; the amount burned
+     * is exactly the `liquidity` pulled from msg.sender's balance. Compliance:
+     * the caller (from) is allowed even if revoked (exit right), but a
+     * recipient other than the caller must be CVI-verified.
+     */
+    function exitLiquidity(
+        uint256 liquidity,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        address to
+    ) external override nonReentrant returns (uint256 amount0, uint256 amount1) {
+        require(to != address(0), "INVALID_TO");
+
+        // Exit right: a revoked user may redeem their own LP. The recipient
+        // check mirrors burn(): to != msg.sender requires CVI(to).
+        if (to != msg.sender) {
+            _checkComplianceRemoveLiquidity(to);
+        }
+
+        // Pull the caller's own LP into the pair (to == address(this) is the
+        // exit sink — exempt from the peer-transfer CVI gate in _update).
+        _transfer(msg.sender, address(this), liquidity);
+
+        (amount0, amount1) = _burnLiquidity(liquidity, to);
+
+        require(amount0 >= amount0Min, "INSUFFICIENT_A_AMOUNT");
+        require(amount1 >= amount1Min, "INSUFFICIENT_B_AMOUNT");
+    }
+
+    /**
+     * @dev Internal burn: burns exactly `liquidity` (which must already sit in
+     * the pair's balance — either parked by the router in this tx, or pulled
+     * by exitLiquidity moments ago). Never reads the parked balance, so a
+     * caller can only redeem the LP it actually deposited.
+     */
+    function _burnLiquidity(uint256 liquidity, address to) internal returns (uint256 amount0, uint256 amount1) {
         (uint112 _reserve0, uint112 _reserve1, ) = this.getReserves();
         address _token0 = token0;
         address _token1 = token1;
         uint256 balance0 = IERC20(_token0).balanceOf(address(this));
         uint256 balance1 = IERC20(_token1).balanceOf(address(this));
-        uint256 liquidity = balanceOf(address(this));
 
         bool feeOn = _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply();
@@ -257,10 +321,19 @@ contract VeriPair is IVeriPair, ERC20, Ownable2Step, Pausable, ReentrancyGuard {
         address to,
         bytes calldata data
     ) external override nonReentrant {
-        // H-05: check the ACTUAL user. msg.sender is the router for mediated
-        // swaps, so the recipient `to` is the real user. Skip factory pairs
-        // (multi-hop intermediate hops) and self-delivery (router ETH-unwrap,
-        // which is already checked at router level).
+        // NEW-01: an unverified user must NOT bypass compliance by calling the
+        // pair directly with to == msg.sender. The old `to != msg.sender` skip
+        // let anyone call pair.swap(to=self) and dodge every check.
+        // New rule:
+        //   - CVI(msg.sender) UNLESS msg.sender == router  (closes the bypass:
+        //     a direct caller is always checked; the router is trusted)
+        //   - CVI(to) UNLESS isPair(to) (multi-hop intermediate hops) or
+        //     self-delivery (to == msg.sender — the router's ETH-unwrap path,
+        //     where the caller was just verified above, or is the router).
+        address routerAddr = IVeriFactory(factory).router();
+        if (msg.sender != routerAddr) {
+            _checkComplianceSwap(msg.sender);
+        }
         if (to != msg.sender && !IVeriFactory(factory).isPair(to)) {
             _checkComplianceSwap(to);
         }
@@ -377,9 +450,17 @@ contract VeriPair is IVeriPair, ERC20, Ownable2Step, Pausable, ReentrancyGuard {
     /**
      * @dev Override ERC20._update to enforce CVI on real LP transfers.
      * Mint (from=0) and burn (to=0) are internal flows handled by mint()/burn().
+     *
+     * NEW-03: a transfer whose destination is the PAIR ITSELF (to ==
+     * address(this)) is the documented redemption path for revoked users —
+     * depositing LP into the pair is how a revoked wallet gets its shares to
+     * burn(to = itself). It is exempt from the peer-transfer CVI checks so the
+     * exit path cannot be blocked; the burn() recipient check still gates where
+     * the underlying assets go. Transfers to any other address require both
+     * parties CVI-verified.
      */
     function _update(address from, address to, uint256 value) internal override {
-        if (from != address(0) && to != address(0)) {
+        if (from != address(0) && to != address(0) && to != address(this)) {
             _checkComplianceTransfer(from, to);
         }
         super._update(from, to, value);

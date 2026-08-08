@@ -30,7 +30,7 @@ export function Modal({ open, onClose, title, children, className, labelledBy }:
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#06090F]/70 p-4 backdrop-blur-md animate-fade-in"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -38,14 +38,16 @@ export function Modal({ open, onClose, title, children, className, labelledBy }:
     >
       <div
         className={cn(
-          'w-full max-w-md max-h-[80vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0E1A2B] p-6 shadow-[0_0_40px_rgba(45,212,191,0.15)] animate-slide-up',
+          'w-full max-w-md max-h-[80vh] overflow-y-auto rounded-3xl border border-white/12 p-6 animate-slide-up',
+          'bg-gradient-to-b from-white/[0.07] to-white/[0.03] backdrop-blur-2xl',
+          'shadow-[inset_0_1px_0_rgba(255,255,255,0.10),0_30px_80px_rgba(0,0,0,0.60),0_0_50px_rgba(45,212,191,0.12)]',
           className
         )}
         onClick={e => e.stopPropagation()}
       >
         {title && (
           <div className="mb-4 flex items-center justify-between">
-            <h2 id={labelledBy} className="text-lg font-semibold text-text-primary">
+            <h2 id={labelledBy} className="font-display text-lg font-semibold text-text-primary">
               {title}
             </h2>
             <button

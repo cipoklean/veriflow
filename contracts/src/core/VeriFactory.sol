@@ -19,6 +19,10 @@ contract VeriFactory is IVeriFactory, Ownable2Step {
     address public _feeTo;
     address public _feeToSetter;
 
+    // NEW-01: the canonical router. Pairs enforce CVI(msg.sender) unless
+    // msg.sender == router, so the router itself never needs CVI registration.
+    address public router;
+
     address[] private _allPairs;
     mapping(address => mapping(address => address)) private _getPair;
     mapping(address => bool) public isPair;
@@ -75,6 +79,15 @@ contract VeriFactory is IVeriFactory, Ownable2Step {
     function setFeeTo(address _newFeeTo) external override onlyFeeToSetter {
         emit FeeToUpdated(_feeTo, _newFeeTo);
         _feeTo = _newFeeTo;
+    }
+
+    /**
+     * @notice Set the canonical router (owner only). Pairs use this to exempt
+     * router-mediated calls from the CVI(msg.sender) check (NEW-01).
+     */
+    function setRouter(address _router) external override onlyOwner {
+        require(_router != address(0), "ZERO_ADDRESS");
+        router = _router;
     }
 
     function setFeeToSetter(address _newFeeToSetter) external override onlyOwner {
