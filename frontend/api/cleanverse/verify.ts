@@ -12,7 +12,7 @@
  *
  * Secrets live only here (server-side). See ../lib/cleanverseServer.ts.
  */
-import { generateApass, waitForApass, registerWalletOnChain, makeCustomerId } from '../lib/cleanverseServer';
+import { generateApass, waitForApass, registerWalletOnChain, makeCustomerId } from '../lib/cleanverseServer.js';
 
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 

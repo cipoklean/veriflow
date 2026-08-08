@@ -6,7 +6,7 @@
  * to add real testnet USDC depth to the WMON/USDC pool. We log the raw response
  * so the result is visible in Vercel function logs.
  */
-import { requestFaucet } from '../lib/cleanverseServer';
+import { requestFaucet } from '../lib/cleanverseServer.js';
 
 export const config = { runtime: 'nodejs', maxDuration: 30 };
 

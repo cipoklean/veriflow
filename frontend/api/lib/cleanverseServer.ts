@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Server-only Cleanverse Cooperate API client.
  *

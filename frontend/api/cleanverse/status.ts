@@ -3,7 +3,7 @@
  * Proxies /query_apass so the UI can show A-Pass tier / expiry.
  * Secrets stay server-side; only the (non-sensitive) address is in the URL.
  */
-import { queryApass } from '../lib/cleanverseServer';
+import { queryApass } from '../lib/cleanverseServer.js';
 
 export const config = { runtime: 'nodejs', maxDuration: 15 };
 
