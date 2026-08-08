@@ -453,6 +453,20 @@ export function SwapPage() {
     ? safeBalance(formatUnits(quoteMath.maxSwapIn, fromToken.decimals))
     : Number.POSITIVE_INFINITY; // no pool → cap is the wallet itself
   const maxSwappable = Math.min(walletBalanceNum, liquidityCapNum);
+
+  // Trim a number to <=6 decimals, stripping trailing zeros (e.g. 25% of
+  // 4.6330 → "1.158257", never "1.158257538400000008"). Used for quick-size
+  // chip fills so the input shows clean values.
+  function trimSix(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return '0';
+    const s = n.toFixed(6);
+    return s.replace(/\.?0+$/, '');
+  }
+  // MAX chip value: native MON keeps a 0.01 gas buffer so a MAX click can never
+  // fail on gas; ERC20 uses the full balance.
+  const maxChipValue = fromToken.isNative
+    ? Math.max(0, walletBalanceNum - 0.01)
+    : walletBalanceNum;
   const hasNoBalance = walletBalanceNum <= 0;
   // INSUFFICIENT BALANCE: amountIn formatted vs wallet balance formatted.
   const amountInNum = fromAmount ? safeBalance(fromAmount) : 0;
@@ -521,16 +535,25 @@ export function SwapPage() {
               />
             </div>
             {/* QUICK-SIZE CHIPS: faucet-scale presets. 10/25/50% of wallet balance
-                (capped to what the pool can absorb), plus the existing Max. */}
+                (capped to what the pool can absorb), plus MAX. Chip amounts use
+                bigint math (parseUnits * pct / 100) to avoid raw float artifacts,
+                then trimmed to 6 decimals with trailing zeros stripped. */}
             <div className="mt-3 flex items-center gap-2">
               {[0.1, 0.25, 0.5].map(pct => {
-                const preset = walletBalanceNum * pct;
+                // Bigint-safe: parseUnits(balance,18) * pctN / 100n, trimmed to 6dp.
+                const balWei = parseUnits(
+                  (fromToken.isNative ? walletBalanceNum.toString() : fromBalanceFormatted || '0'),
+                  18,
+                );
+                const pctN = BigInt(Math.round(pct * 100));
+                const presetWei = (balWei * pctN) / 100n;
+                const preset = Number(formatUnits(presetWei, 18));
                 const capped = Math.min(preset, maxSwappable);
                 const disabled = hasNoBalance || isSameAsset || capped <= 0;
                 return (
                   <button
                     key={pct}
-                    onClick={() => handleFromAmountChange(capped.toFixed(fromToken.decimals))}
+                    onClick={() => handleFromAmountChange(trimSix(capped))}
                     disabled={disabled}
                     className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -538,6 +561,15 @@ export function SwapPage() {
                   </button>
                 );
               })}
+              {/* MAX: native MON leaves 0.01 gas buffer so a MAX click can never
+                  fail on gas; tokens use full balance. Trimmed to 6dp. */}
+              <button
+                onClick={() => handleFromAmountChange(trimSix(maxChipValue))}
+                disabled={hasNoBalance || isSameAsset}
+                className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Max
+              </button>
             </div>
             <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
               <span className="font-mono text-sm text-text-secondary">
@@ -661,52 +693,89 @@ export function SwapPage() {
                 <div className="cursor-help">
                   <div className="text-xs uppercase tracking-wider text-text-muted">Price impact</div>
                   <div className={cn('font-mono',
-                    quote.priceImpact > 5 ? 'text-error-primary' :
+                    quote.priceImpact > 5 ? 'text-warning-primary' :
                     quote.priceImpact >= 1 ? 'text-warning-primary' :
                     'text-success-primary')}
                   >
                     {quote.priceImpact.toFixed(2)}%
+                    {quote.priceImpact < 1 && (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-success-primary/15 px-2 py-0.5 text-[10px] font-medium text-success-primary">
+                        Low impact
+                      </span>
+                    )}
                   </div>
                 </div>
               </Tooltip>
             </div>
 
-            {/* HONEST QUOTES: impact warnings + max-swap guidance from real reserves */}
-            {quote.priceImpact > 5 ? (
-              <div className="mt-3 flex items-start gap-2 rounded-xl border border-error-primary/30 bg-error-light/15 p-3 text-error-primary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <div className="text-sm">
-                  <div className="font-medium">Price impact too high — try a smaller amount or add liquidity</div>
-                  <div className="mt-0.5 text-xs text-text-muted">
-                    Impact {quote.priceImpact.toFixed(2)}%: this trade would move the pool price by over 5%.
-                    Testnet pools are seeded from public faucets, so large trades move the price.
-                  </div>
+            {/* HONEST QUOTES — tiered warning tone (less bloody):
+                <1%: nothing. 1-5%: amber info line. 5-15%: soft amber card.
+                >15%: red card with constructive copy. Impact + liquidity
+                warnings MERGE into one card when both fire (liquidity hard
+                stop first, then impact). Pure red stays reserved for actual
+                stops: reverts, insufficient balance, unverified. */}
+            {(() => {
+              const impactWarn =
+                quote.priceImpact > 15
+                  ? { tone: 'red' as const, card: true }
+                  : quote.priceImpact >= 5
+                  ? { tone: 'amber' as const, card: true }
+                  : quote.priceImpact >= 1
+                  ? { tone: 'amber' as const, card: false }
+                  : null;
+              const liqWarn = quoteMath.exceedsLiquidity && poolReserves;
+              if (!impactWarn && !liqWarn) return null;
+              // MERGED card: liquidity (hard stop) first, impact second.
+              const amberCard = impactWarn?.tone === 'amber' && impactWarn.card;
+              const redCard = impactWarn?.tone === 'red';
+              const cardTone = redCard
+                ? { wrap: 'border-error-primary/30 bg-error-light/15 text-error-primary', icon: 'text-error-primary' }
+                : { wrap: 'border-amber-400/40 bg-amber-500/10 text-amber-200', icon: 'text-amber-300' };
+              return (
+                <div className={`mt-3 space-y-3 ${amberCard || redCard ? '' : ''}`}>
+                  {/* Liquidity hard stop (always a card, the real block) */}
+                  {liqWarn && (
+                    <div className={`flex items-start gap-2 rounded-xl border ${redCard ? cardTone.wrap : 'border-error-primary/30 bg-error-light/15 text-error-primary'} p-3`}>
+                      <AlertTriangle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${redCard ? cardTone.icon : 'text-error-primary'}`} />
+                      <div className="text-sm">
+                        <div className="font-medium">This trade exceeds available liquidity</div>
+                        <div className="mt-0.5 text-xs text-text-muted">
+                          Max you can swap: {formatUnits(quoteMath.maxSwapIn, fromToken.decimals).slice(0, 8)} {fromToken.symbol}
+                          {' '}for ~{formatUnits((quoteMath.maxSwapIn * 997n) / 1000n * poolReserves!.reserveOut / (poolReserves!.reserveIn + ((quoteMath.maxSwapIn * 997n) / 1000n)), toToken.decimals).slice(0, 8)} {toToken.symbol}.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Impact warning: amber info line (1-5%), soft amber card (5-15%),
+                      red card (>15%) with constructive copy. Merged under liquidity
+                      when both fire. */}
+                  {impactWarn && (
+                    impactWarn.card ? (
+                      <div className={`flex items-start gap-2 rounded-xl border ${cardTone.wrap} p-3`}>
+                        <AlertTriangle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cardTone.icon}`} />
+                        <div className="text-sm">
+                          <div className="font-medium">
+                            {redCard
+                              ? `High price impact (${quote.priceImpact.toFixed(2)}%)`
+                              : `Price impact: ${quote.priceImpact.toFixed(2)}%`}
+                          </div>
+                          <div className="mt-0.5 text-xs text-text-muted">
+                            {redCard
+                              ? 'This trade moves the pool price — a smaller size gets a better rate.'
+                              : 'The pool is small — this trade moves the price. Consider a smaller amount.'}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-xs text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                        <span>Price impact {quote.priceImpact.toFixed(2)}% — the pool is small, so this trade moves the price.</span>
+                      </div>
+                    )
+                  )}
                 </div>
-              </div>
-            ) : quote.priceImpact >= 1 ? (
-              <div className="mt-3 flex items-start gap-2 rounded-xl border border-warning-primary/30 bg-warning-light/10 p-3 text-warning-primary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <div className="text-sm">
-                  <div className="font-medium">High price impact: {quote.priceImpact.toFixed(2)}%</div>
-                  <div className="mt-0.5 text-xs text-text-muted">
-                    The pool is small — this trade moves the price. Consider a smaller amount.
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {quoteMath.exceedsLiquidity && poolReserves && (
-              <div className="mt-3 flex items-start gap-2 rounded-xl border border-error-primary/30 bg-error-light/15 p-3 text-error-primary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <div className="text-sm">
-                  <div className="font-medium">This trade exceeds available liquidity</div>
-                  <div className="mt-0.5 text-xs text-text-muted">
-                    Max you can swap: {formatUnits(quoteMath.maxSwapIn, fromToken.decimals).slice(0, 8)} {fromToken.symbol}
-                    {' '}for ~{formatUnits((quoteMath.maxSwapIn * 997n) / 1000n * poolReserves.reserveOut / (poolReserves.reserveIn + ((quoteMath.maxSwapIn * 997n) / 1000n)), toToken.decimals).slice(0, 8)} {toToken.symbol}.
-                  </div>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Max is now the unified min(wallet, poolCap) button next to the
                 Balance line — no separate pool-cap row (it rendered "0" when
