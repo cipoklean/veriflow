@@ -33,11 +33,41 @@ export function sleep(ms: number): Promise<void> {
 
 export function debounce<T extends (...args: unknown[]) => unknown>(
   fn: T,
-  ms: number
+  ms: number,
 ): (...args: Parameters<T>) => void {
   let timeoutId: ReturnType<typeof setTimeout>;
   return (...args: Parameters<T>) => {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/**
+ * FE-21: cap the gas fee a wallet requests for a write. Monad testnet's base
+ * fee swings wildly (100-460+ Gwei); MetaMask multiplies gasLimit * maxFeePerGas
+ * for the "max" it shows, so during a spike it quotes an absurd 0.2+ MON even
+ * though a swap only needs ~520k gas (~0.05 MON at 100 Gwei). We read the live
+ * base fee and cap maxFeePerGas at base * 1.25 with no priority fee (tips are
+ * meaningless on Monad testnet), so the wallet shows a realistic max. If the
+ * chain has no EIP-1559 base fee yet (base 0), we leave gas unset and let the
+ * wallet use its default.
+ */
+export async function withGasCap(
+  client: { getBlock: (args: { includeTransactions?: boolean }) => Promise<{ baseFeePerGas?: bigint | null }> },
+  request: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let base: bigint | null | undefined;
+  try {
+    const block = await client.getBlock({ includeTransactions: false });
+    base = block.baseFeePerGas;
+  } catch {
+    base = null;
+  }
+  if (!base || base === 0n) return request; // no EIP-1559 base fee: let wallet decide
+  const capped = (base * 125n) / 100n;
+  return {
+    ...request,
+    maxFeePerGas: capped,
+    maxPriorityFeePerGas: 0n,
   };
 }

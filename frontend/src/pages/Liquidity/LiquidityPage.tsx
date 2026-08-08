@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useAccount, useConfig, useReadContract, useWriteContract, useWaitForTransactionReceipt, useChainId } from 'wagmi';
+import { useAccount, useConfig, useReadContract, useWaitForTransactionReceipt, useChainId, useBalance, useWriteContract, usePublicClient } from 'wagmi';
 import { readContract, writeContract as writeContractAction } from 'wagmi/actions';
 import { parseUnits, formatUnits, erc20Abi, type Address } from 'viem';
 import { Zap, Minus, Shield, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, Wallet, ArrowRightLeft } from 'lucide-react';
 import { cn, formatNumber } from '@/lib/utils';
+import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
+import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
 import { getContractAddresses } from '@/contracts/config';
 import { useSupportedTokens, decodeRevertReason } from '@/contracts/useVeriFlow';
@@ -13,6 +15,10 @@ import VeriPairAbi from '@/contracts/abis/VeriPair.json';
 import { Modal } from '@/components/ui/Modal';
 import { TokenIcon } from '@/components/ui/TokenIcon';
 import { Badge } from '@/components/ui/Badge';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { ActionButton } from '@/components/ui/ActionButton';
+import { useTxDock } from '@/components/ui/TxDock';
+import { useWalletModal } from '@/components/VeriFlowApp/WalletModalProvider';
 
 interface Token {
   symbol: string;
@@ -39,9 +45,12 @@ export function LiquidityPage() {
   const contractAddresses = getContractAddresses(chainId);
   const supportedTokens = useSupportedTokens();
   const { toast } = useToast();
+  const { track, confirm, revert } = useTxDock();
+  const { open: openWalletModal } = useWalletModal();
 
-  // Action writes (add / remove liquidity on the router).
-  const { writeContract, data: txHash, isPending: isWriting, error: writeError } = useWriteContract();
+  // Action writes (add / remove liquidity on the router). Gas-capped FE-21.
+  const publicClient = usePublicClient();
+  const { writeContract, data: txHash, isPending: isWriting, error: writeError, cappedWriteContract } = useGasCappedWrite();
   const { isLoading: isConfirming, isSuccess, isError: isTxError, error: receiptError } = useWaitForTransactionReceipt({ hash: txHash });
 
   // Approval sequencing: we store the pending approval step (hash + follow-up
@@ -106,6 +115,27 @@ export function LiquidityPage() {
     query: { enabled: !!pairAddress && !!address && pairAddress !== '0x0000000000000000000000000000000000000000' },
   });
 
+  // NEW-04: getReserves() returns (reserve0, reserve1) in PAIR SORT order
+  // (token0 < token1 by address, e.g. USDC < WMON), which does NOT necessarily
+  // match the user's A/B selection. Read the pair's actual token order and map
+  // reserves to the SELECTED order before display and before the amountB
+  // auto-fill.
+  const { data: pairToken0 } = useReadContract({
+    address: pairAddress as Address | undefined,
+    abi: VeriPairAbi,
+    functionName: 'token0',
+    chainId: 10143,
+    query: { enabled: !!pairAddress && pairAddress !== '0x0000000000000000000000000000000000000000' },
+  });
+
+  const { data: pairToken1 } = useReadContract({
+    address: pairAddress as Address | undefined,
+    abi: VeriPairAbi,
+    functionName: 'token1',
+    chainId: 10143,
+    query: { enabled: !!pairAddress && pairAddress !== '0x0000000000000000000000000000000000000000' },
+  });
+
   // LP allowance to the router (for remove) — read live.
   const { data: lpAllowance } = useReadContract({
     address: pairAddress as Address | undefined,
@@ -118,6 +148,38 @@ export function LiquidityPage() {
 
   const isEmptyAddr = !pairAddress || pairAddress === '0x0000000000000000000000000000000000000000';
 
+  // NEW-08: real wallet balances for the selected tokens (live reads, no
+  // hardcoded "Balance: 0"). Native MON resolves to the wallet's ETH balance.
+  const { data: nativeBalance } = useBalance({ address });
+  const { data: tokenABalanceRaw } = useReadContract({
+    address: tokenAAddr,
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    chainId: 10143,
+    query: { enabled: !!address && !tokenA.isNative },
+  });
+  const { data: tokenBBalanceRaw } = useReadContract({
+    address: tokenBAddr,
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    args: address ? [address] : undefined,
+    chainId: 10143,
+    query: { enabled: !!address && !tokenB.isNative },
+  });
+  const tokenABalance = tokenA.isNative ? (nativeBalance?.value ?? 0n) : ((tokenABalanceRaw as bigint | undefined) ?? 0n);
+  const tokenBBalance = tokenB.isNative ? (nativeBalance?.value ?? 0n) : ((tokenBBalanceRaw as bigint | undefined) ?? 0n);
+
+  // Max fills the input with the REAL wallet balance of the selected token
+  // (formatted to its decimals) — never a hardcoded value.
+  const handleMaxA = () => {
+    if (activeTab === 'add') {
+      setAmountA(formatUnits(tokenABalance, tokenA.decimals));
+    } else {
+      setAmountA(formatUnits(poolInfo?.userLiquidity ?? 0n, 18)); // LP tokens
+    }
+  };
+
   useEffect(() => {
     setIsLoading(true);
     setError(null);
@@ -127,12 +189,23 @@ export function LiquidityPage() {
         return;
       }
       const [r0, r1] = (reservesData as [bigint, bigint, number] | undefined) ?? [0n, 0n, 0];
+      // NEW-04: getReserves() is in pair sort order (token0 < token1 by
+      // address). Re-map to the user's SELECTED order (tokenA/tokenB) so both
+      // the display and the amountB auto-fill use consistent units. Cross-check
+      // both token0() and token1() (e.g. USDC as token0, WMON as token1).
+      const t0 = (pairToken0 as string | undefined)?.toLowerCase();
+      const t1 = (pairToken1 as string | undefined)?.toLowerCase();
+      const a = tokenAAddr.toLowerCase();
+      const b = tokenBAddr.toLowerCase();
+      const tokenAIsToken0 = t0 === a || (t1 === b && t0 !== b);
+      const reserveA = tokenAIsToken0 ? r0 : r1;
+      const reserveB = tokenAIsToken0 ? r1 : r0;
       setPoolInfo({
         address: pairAddress as string,
         token0: tokenA,
         token1: tokenB,
-        reserve0: r0,
-        reserve1: r1,
+        reserve0: reserveA,
+        reserve1: reserveB,
         totalSupply: (lpTotalSupply as bigint) ?? 0n,
         userLiquidity: (userLpBalance as bigint) ?? 0n,
       });
@@ -142,7 +215,7 @@ export function LiquidityPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [pairAddress, reservesData, lpTotalSupply, userLpBalance, tokenA, tokenB, isEmptyAddr]);
+  }, [pairAddress, reservesData, lpTotalSupply, userLpBalance, tokenA, tokenB, pairToken0, pairToken1, tokenAAddr, tokenBAddr, isEmptyAddr]);
 
   useEffect(() => {
     if (poolInfo && amountA && parseFloat(amountA) > 0) {
@@ -171,7 +244,7 @@ export function LiquidityPage() {
   // ============================================================
   const doAddLiquidity = useCallback((amountADesired: bigint, amountBDesired: bigint, minA: bigint, minB: bigint) => {
     if (tokenA.isNative) {
-      writeContract({
+      cappedWriteContract({
         address: contractAddresses.veriRouter,
         abi: VeriRouterAbi,
         functionName: 'addLiquidityETH',
@@ -186,7 +259,7 @@ export function LiquidityPage() {
         value: amountADesired,
       });
     } else if (tokenB.isNative) {
-      writeContract({
+      cappedWriteContract({
         address: contractAddresses.veriRouter,
         abi: VeriRouterAbi,
         functionName: 'addLiquidityETH',
@@ -201,7 +274,7 @@ export function LiquidityPage() {
         value: amountBDesired,
       });
     } else {
-      writeContract({
+      cappedWriteContract({
         address: contractAddresses.veriRouter,
         abi: VeriRouterAbi,
         functionName: 'addLiquidity',
@@ -239,13 +312,23 @@ export function LiquidityPage() {
           chainId: 10143,
         });
         if (allowanceA < amountADesired) {
-          const hash = await writeContractAction(config, {
-            address: tokenAAddr,
-            abi: erc20Abi,
-            functionName: 'approve',
-            args: [contractAddresses.veriRouter, amountADesired],
-            chainId: 10143,
-          });
+          // FE-21: gas-capped approve.
+          const capped = publicClient
+            ? await withGasCap(publicClient as never, {
+                address: tokenAAddr,
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [contractAddresses.veriRouter, amountADesired],
+                chainId: 10143,
+              })
+            : {
+                address: tokenAAddr,
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [contractAddresses.veriRouter, amountADesired],
+                chainId: 10143,
+              };
+          const hash = await writeContractAction(config, capped as never);
           setApprovalStep({ hash, action: 'add', label: `approve ${tokenA.symbol}` });
           return; // continues in the approval-confirmed effect below
         }
@@ -259,13 +342,23 @@ export function LiquidityPage() {
           chainId: 10143,
         });
         if (allowanceB < amountBDesired) {
-          const hash = await writeContractAction(config, {
-            address: tokenBAddr,
-            abi: erc20Abi,
-            functionName: 'approve',
-            args: [contractAddresses.veriRouter, amountBDesired],
-            chainId: 10143,
-          });
+          // FE-21: gas-capped approve.
+          const capped = publicClient
+            ? await withGasCap(publicClient as never, {
+                address: tokenBAddr,
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [contractAddresses.veriRouter, amountBDesired],
+                chainId: 10143,
+              })
+            : {
+                address: tokenBAddr,
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [contractAddresses.veriRouter, amountBDesired],
+                chainId: 10143,
+              };
+          const hash = await writeContractAction(config, capped as never);
           setApprovalStep({ hash, action: 'add', label: `approve ${tokenB.symbol}` });
           return; // continues in the approval-confirmed effect below
         }
@@ -287,14 +380,18 @@ export function LiquidityPage() {
     if (tokenA.isNative || tokenB.isNative) {
       const token = tokenA.isNative ? tokenBAddr : tokenAAddr;
       const minToken = tokenA.isNative ? minB : minA;
-      writeContract({
+      // NEW-06: amountETHMin must be the WMON (native) leg's own minimum in
+      // ITS decimals — NOT minA + minB, which mixes 6-dec USDC and 18-dec WMON
+      // into a meaningless sum that would make the slippage floor absurd.
+      const amountETHMin = tokenA.isNative ? minA : minB;
+      cappedWriteContract({
         address: contractAddresses.veriRouter,
         abi: VeriRouterAbi,
         functionName: 'removeLiquidityETH',
-        args: [token, liquidity, minToken, minA + minB, address, Math.floor(Date.now() / 1000) + 1200],
+        args: [token, liquidity, minToken, amountETHMin, address, Math.floor(Date.now() / 1000) + 1200],
       });
     } else {
-      writeContract({
+      cappedWriteContract({
         address: contractAddresses.veriRouter,
         abi: VeriRouterAbi,
         functionName: 'removeLiquidity',
@@ -319,13 +416,23 @@ export function LiquidityPage() {
       // Strict sequencing: approve the LP token, await the receipt, then remove.
       // (No setTimeout — the approval-confirmed effect below fires the removal.)
       if (lpAllowance !== undefined && lpAllowance < liquidity) {
-        const hash = await writeContractAction(config, {
-          address: poolInfo.address as `0x${string}`,
-          abi: erc20Abi,
-          functionName: 'approve',
-          args: [contractAddresses.veriRouter, liquidity],
-          chainId: 10143,
-        });
+        // FE-21: gas-capped approve.
+        const capped = publicClient
+          ? await withGasCap(publicClient as never, {
+              address: poolInfo.address as `0x${string}`,
+              abi: erc20Abi,
+              functionName: 'approve',
+              args: [contractAddresses.veriRouter, liquidity],
+              chainId: 10143,
+            })
+          : {
+              address: poolInfo.address as `0x${string}`,
+              abi: erc20Abi,
+              functionName: 'approve',
+              args: [contractAddresses.veriRouter, liquidity],
+              chainId: 10143,
+            };
+        const hash = await writeContractAction(config, capped as never);
         setApprovalStep({ hash, action: 'remove', label: `approve LP (${tokenA.symbol}/${tokenB.symbol})` });
         return; // continues in the approval-confirmed effect below
       }
@@ -370,20 +477,32 @@ export function LiquidityPage() {
 
   // Action success: refetch state. Action revert: decode + show, NEVER success.
   useEffect(() => {
-    if (isSuccess) {
+    if (isSuccess && txHash) {
+      confirm(txHash);
       setAmountA('');
       setAmountB('');
-      toast({ title: 'Liquidity updated!', type: 'success' });
+      toast({ title: 'Liquidity updated!', type: 'success', txHash });
     }
-  }, [isSuccess, toast]);
+  }, [isSuccess, txHash, confirm, toast]);
 
   useEffect(() => {
-    if (isTxError) {
+    if (isTxError && txHash) {
+      revert(txHash);
       const reason = decodeRevertReason(receiptError ?? writeError);
       setError(reason);
-      toast({ title: 'Transaction reverted', description: reason, type: 'error' });
+      toast({ title: 'Transaction reverted', description: reason, type: 'error', txHash });
     }
-  }, [isTxError, receiptError, writeError, toast]);
+  }, [isTxError, txHash, revert, receiptError, writeError, toast]);
+
+  // Track pending txs in the global dock (approve + add/remove).
+  useEffect(() => {
+    if (txHash && !isSuccess && !isTxError) {
+      track(txHash, activeTab === 'add' ? 'Add liquidity' : 'Remove liquidity');
+    }
+    if (approvalStep?.hash && !isApproveConfirmed && !isApproveError) {
+      track(approvalStep.hash, `Approve ${approvalStep.label.replace('approve ', '')}`);
+    }
+  }, [txHash, isSuccess, isTxError, track, approvalStep, isApproveConfirmed, isApproveError, activeTab]);
 
   if (!isConnected) {
     return (
@@ -394,7 +513,7 @@ export function LiquidityPage() {
           </div>
           <h2 className="mb-2 text-xl font-semibold text-text-primary">Connect Wallet for Liquidity</h2>
           <p className="mb-6 text-text-muted">Connect your wallet to add or remove liquidity</p>
-          <a href="/#wallet" className="btn-primary">Connect Wallet</a>
+          <button onClick={() => openWalletModal()} className="btn-primary">Connect Wallet</button>
         </div>
       </div>
     );
@@ -518,16 +637,14 @@ export function LiquidityPage() {
             />
             <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
               <span className="font-mono text-sm text-text-secondary">
-                Balance: {activeTab === 'add' ? '0' : formatNumber(Number(formatUnits(poolInfo?.userLiquidity || 0n, 18)))} {activeTab === 'add' ? tokenA.symbol : 'LP'}
+                Balance: {activeTab === 'add' ? formatNumber(Number(formatUnits(tokenABalance, tokenA.decimals))) : formatNumber(Number(formatUnits(poolInfo?.userLiquidity || 0n, 18)))} {activeTab === 'add' ? tokenA.symbol : 'LP'}
               </span>
-              {activeTab === 'add' && (
-                <button
-                  onClick={() => setAmountA('0.0')}
-                  className="text-xs font-medium text-accent-teal transition-colors hover:text-accent-green"
-                >
-                  Max
-                </button>
-              )}
+              <button
+                onClick={handleMaxA}
+                className="text-xs font-medium text-accent-teal transition-colors hover:text-accent-green"
+              >
+                Max
+              </button>
             </div>
           </div>
         </div>
@@ -579,7 +696,7 @@ export function LiquidityPage() {
               />
               <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
                 <span className="font-mono text-sm text-text-secondary">
-                  Balance: 0 {tokenB.symbol}
+                  Balance: {formatNumber(Number(formatUnits(tokenBBalance, tokenB.decimals)))} {tokenB.symbol}
                 </span>
               </div>
             </div>
@@ -688,49 +805,52 @@ export function LiquidityPage() {
         </div>
       )}
 
-      {/* Action Button */}
-      <button
-        onClick={activeTab === 'add' ? handleAddLiquidity : handleRemoveLiquidity}
-        disabled={
-          !amountA ||
-          parseFloat(amountA) <= 0 ||
-          (activeTab === 'add' && (!amountB || parseFloat(amountB) <= 0)) ||
-          (activeTab === 'add' && tokenA.address === tokenB.address) ||
-          (!poolExists && activeTab === 'remove') ||
-          isLoading || isWriting || isConfirming || awaitingApproval
-        }
-        className={cn(
-          'btn-primary w-full py-4 text-lg font-semibold disabled:opacity-50',
-          activeTab === 'remove' && 'btn-danger'
-        )}
-      >
-        {awaitingApproval ? (
-          <>
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Waiting for approval…
-          </>
-        ) : isWriting || isConfirming ? (
-          <>
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Confirming…
-          </>
-        ) : isLoading ? (
-          <>
-            <Loader2 className="h-5 w-5 animate-spin" />
-            Processing…
-          </>
-        ) : activeTab === 'add' ? (
-          <>
-            <Zap className="h-5 w-5" />
-            <span>{isFirstLiquidity ? 'Create Pool & Add' : 'Add Liquidity'}</span>
-          </>
-        ) : (
-          <>
-            <Minus className="h-5 w-5" />
-            <span>Remove Liquidity</span>
-          </>
-        )}
-      </button>
+      {/* Action Button — busy ≠ disabled; disabled only when not applicable,
+          always with an explanatory tooltip (§1) */}
+      {(() => {
+        const hasA = !!amountA && parseFloat(amountA) > 0;
+        const hasB = activeTab === 'add' ? !!amountB && parseFloat(amountB) > 0 : true;
+        const disabledReason = !hasA
+          ? 'Enter an amount'
+          : !hasB
+            ? `Enter the ${tokenB.symbol} amount`
+            : activeTab === 'add' && tokenA.address === tokenB.address
+              ? 'Select two different tokens'
+              : !poolExists && activeTab === 'remove'
+                ? 'No pool exists for this pair'
+                : null;
+        const isBusy = isLoading || isWriting || isConfirming || awaitingApproval;
+        const state = awaitingApproval || isBusy ? 'pending' : error ? 'error' : 'idle';
+        return (
+          <Tooltip content={disabledReason ?? (activeTab === 'add' ? 'Provide liquidity — compliance-checked on-chain' : 'Remove your liquidity — compliance-checked on-chain')} placement="top" disabled={!!disabledReason}>
+            <ActionButton
+              state={state}
+              disabled={!!disabledReason}
+              variant={activeTab === 'remove' ? 'danger' : 'primary'}
+              onClick={activeTab === 'add' ? handleAddLiquidity : handleRemoveLiquidity}
+              pendingLabel={awaitingApproval ? 'Waiting for approval…' : isConfirming ? 'Confirming…' : 'Processing…'}
+              signingLabel="Confirm in wallet…"
+              successLabel={activeTab === 'add' ? 'Liquidity added' : 'Liquidity removed'}
+              errorLabel="Failed"
+              errorMessage={error ?? undefined}
+              onRetry={error ? (activeTab === 'add' ? handleAddLiquidity : handleRemoveLiquidity) : undefined}
+              className="py-4 text-lg font-semibold disabled:opacity-60"
+            >
+              {activeTab === 'add' ? (
+                <>
+                  <Zap className="h-5 w-5" />
+                  <span>{isFirstLiquidity ? 'Create Pool & Add' : 'Add Liquidity'}</span>
+                </>
+              ) : (
+                <>
+                  <Minus className="h-5 w-5" />
+                  <span>Remove Liquidity</span>
+                </>
+              )}
+            </ActionButton>
+          </Tooltip>
+        );
+      })()}
 
       {/* Compliance Info */}
       <div className="card border-border-subtle bg-bg-secondary/50">
