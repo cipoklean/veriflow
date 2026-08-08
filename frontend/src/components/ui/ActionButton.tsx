@@ -62,11 +62,13 @@ export function ActionButton({
 
   const isBusy = state === 'signing' || state === 'pending';
 
-  const variantClasses = {
-    primary: 'btn-primary',
-    secondary: 'btn-secondary',
-    danger: 'btn-danger',
-  }[variant];
+  const variantClasses = disabled
+    ? 'btn-disabled'
+    : {
+        primary: 'btn-primary',
+        secondary: 'btn-secondary',
+        danger: 'btn-danger',
+      }[variant];
 
   return (
     <div className={cn('w-full', className)}>
@@ -78,7 +80,6 @@ export function ActionButton({
           variantClasses,
           showError && 'border-error-primary/60',
           isBusy && 'glow-pulse',
-          disabled && 'opacity-60 cursor-not-allowed',
           className
         )}
         animate={

@@ -245,6 +245,16 @@
       0 2px 10px rgba(45, 212, 191, 0.20);
   }
 
+  /* Disabled (action not applicable): flat, dimmed, NO gradient, NO glow.
+     ~60% opacity + neutral surface so it never reads as a success CTA. */
+  .btn-disabled {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.40);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
   /* Secondary: glass pill */
   .btn-secondary {
     background-color: rgba(255, 255, 255, 0.07);
