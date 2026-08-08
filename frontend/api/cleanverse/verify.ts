@@ -68,7 +68,14 @@ function decryptJson(envelope: { data: string }): any {
 }
 
 async function generateApass(address: string, customerId: string): Promise<any> {
-  const payload = encryptJson({ customerId, wallet: { address, chain: 'monad' } });
+  // 10-year expiration (seconds) — required by /generate_apass per the
+  // "expiration time cannot be null" error from Cleanverse.
+  const expiration = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
+  const payload = encryptJson({
+    customerId,
+    wallet: { address, chain: 'monad' },
+    expiration,
+  });
   const res = await fetch(`${BASE}/generate_apass`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'api-id': API_ID as string },
@@ -89,9 +96,8 @@ async function generateApass(address: string, customerId: string): Promise<any> 
       /* not encrypted */
     }
   }
-  if (json && json.code && json.code !== '0000') {
-    throw new Error(`Cleanverse error ${json.code}: ${json.message ?? 'no message'}`);
-  }
+  // NOTE: do NOT throw on a Cleanverse error code here — the caller needs the
+  // raw body (rawCleanverseResponse) so failures are never opaque.
   return json;
 }
 
@@ -163,6 +169,17 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   try {
     // Step 1 — one encrypted generate_apass call.
     rawCleanverseResponse = await generateApass(address, makeCustomerId());
+
+    // Surface a Cleanverse error code honestly, with the raw body attached.
+    if (rawCleanverseResponse && rawCleanverseResponse.code && rawCleanverseResponse.code !== '0000') {
+      sendJson(res, 200, {
+        ok: false,
+        step: 'generate',
+        error: `Cleanverse error ${rawCleanverseResponse.code}: ${rawCleanverseResponse.message ?? 'no message'}`,
+        rawCleanverseResponse,
+      });
+      return;
+    }
 
     // Step 2 — register on-chain, await receipt.
     const tier = tierOf(rawCleanverseResponse);
