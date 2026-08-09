@@ -104,6 +104,14 @@ export function SettingsPage() {
     const poll = window.setInterval(() => refetchVerified(), 3000);
     verifyOnce(address)
       .then((msg: VerifyResult) => {
+        if (msg.already) {
+          // M-7: server pre-checked on-chain — wallet already registered.
+          setCcDone(true);
+          setCcBusy(false);
+          refetchVerified();
+          window.clearInterval(poll);
+          return;
+        }
         if (msg.hash) setCcStep('On-chain confirmation…');
         if (msg.step === 'done' || msg.ok) {
           setCcDone(true);
@@ -114,10 +122,6 @@ export function SettingsPage() {
           setCcError(msg.error || 'Verification failed');
           setCcBusy(false);
           window.clearInterval(poll);
-        }
-        if (msg.rawCleanverseResponse) {
-          // Surface the raw Cleanverse body in the console while we debug.
-          console.log('[cleanverse verify] rawCleanverseResponse', msg.rawCleanverseResponse);
         }
       })
       .catch(() => {

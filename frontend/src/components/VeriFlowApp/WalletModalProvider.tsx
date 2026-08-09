@@ -32,10 +32,14 @@ export function WalletModalProvider({ children }: { children: ReactNode }) {
   const { isConnected, chainId, address } = useAccount();
   const { switchChain, isPending: isSwitchingChain } = useSwitchChain();
   const [isOpen, setIsOpen] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
   const open = useCallback(() => setIsOpen(true), []);
-  const close = useCallback(() => setIsOpen(false), []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setConnectError(null);
+  }, []);
 
   // Auto-close once connected (or if already connected when opened).
   useEffect(() => {
@@ -84,12 +88,14 @@ export function WalletModalProvider({ children }: { children: ReactNode }) {
   const handleConnect = (connectorId: string) => {
     const connector = connectors.find(c => c.id === connectorId);
     if (!connector) return;
+    setConnectError(null);
     connect({ connector }, {
       onError: (err) => {
-        console.error('[VeriFlow] wallet connect failed:', err);
-        window.alert(
-          'Wallet connection failed: ' + (err?.message ?? 'unknown error') +
-          '\n\nMake sure your wallet is unlocked and set to Monad Testnet.'
+        // L-13: inline error in the modal (replaces window.alert) — matches the
+        // inline error/toast pattern used elsewhere in the app.
+        setConnectError(
+          (err?.message ?? 'unknown error') +
+          ' — make sure your wallet is unlocked and set to Monad Testnet.',
         );
       },
       onSuccess: () => setIsOpen(false),
@@ -128,6 +134,14 @@ export function WalletModalProvider({ children }: { children: ReactNode }) {
               <p className="mb-4 text-sm text-text-secondary">
                 Choose your preferred wallet to connect to VeriFlow
               </p>
+              {connectError && (
+                <div
+                  role="alert"
+                  className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+                >
+                  {connectError}
+                </div>
+              )}
               <div className="space-y-2">
                 {availableConnectors.length === 0 ? (
                   <div className="py-6 text-center text-text-secondary">

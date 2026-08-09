@@ -469,6 +469,14 @@ export function SwapPage() {
     fromToken.isNative ? walletBalanceNum.toString() : fromBalanceFormatted || '0',
     18,
   );
+  // Pool-capped max in wei: min(wallet, pool liquidity) — the SAME value the
+  // small "Max:" line uses. Chips + Max all fill min(share, this).
+  const poolCapWei = parseUnits(maxSwappable.toString(), 18);
+  // MAX fill value: pool-capped, with the 0.01 native gas buffer applied first.
+  const maxFillWei =
+    pctOfBalance(walletBalanceWei, 100, fromToken.isNative) < poolCapWei
+      ? pctOfBalance(walletBalanceWei, 100, fromToken.isNative)
+      : poolCapWei;
   const hasNoBalance = walletBalanceNum <= 0;
   // INSUFFICIENT BALANCE: amountIn formatted vs wallet balance formatted.
   const amountInNum = fromAmount ? safeBalance(fromAmount) : 0;
@@ -537,18 +545,19 @@ export function SwapPage() {
                 aria-label="Amount to pay"
               />
             </div>
-            {/* QUICK-SIZE CHIPS: 10/25/50% of wallet balance (capped to what the
-                pool can absorb), plus MAX. Amounts computed with bigint math via
-                pctOfBalance() (no float artifacts), formatted with fmt(). */}
+            {/* QUICK-SIZE CHIPS: 10/25/50/Max fill min(walletShare, poolCap) —
+                the SAME value as the small "Max:" line. One Max semantics, no
+                dual behavior. Native MON keeps the 0.01 gas buffer (pctOfBalance).
+                All bigint math, formatted with fmt(). */}
             <div className="mt-3 flex items-center gap-2">
               {[10, 25, 50].map(pct => {
                 const presetWei = pctOfBalance(walletBalanceWei, pct as 10 | 25 | 50, fromToken.isNative);
-                const capped = Math.min(Number(formatUnits(presetWei, 18)), maxSwappable);
-                const disabled = hasNoBalance || isSameAsset || capped <= 0;
+                const fillWei = presetWei < poolCapWei ? presetWei : poolCapWei;
+                const disabled = hasNoBalance || isSameAsset || fillWei <= 0n;
                 return (
                   <button
                     key={pct}
-                    onClick={() => handleFromAmountChange(fmt(presetWei, 18))}
+                    onClick={() => handleFromAmountChange(fmt(fillWei, 18))}
                     disabled={disabled}
                     className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -556,11 +565,11 @@ export function SwapPage() {
                   </button>
                 );
               })}
-              {/* MAX: native MON leaves a 0.01 gas buffer (pctOfBalance handles it)
-                  so a MAX click can never fail on gas; tokens use full balance. */}
+              {/* MAX: same pool-capped value as the small "Max:" line; native MON
+                  keeps the 0.01 gas buffer so a MAX click can never fail on gas. */}
               <button
-                onClick={() => handleFromAmountChange(fmt(pctOfBalance(walletBalanceWei, 100, fromToken.isNative), 18))}
-                disabled={hasNoBalance || isSameAsset}
+                onClick={() => handleFromAmountChange(fmt(maxFillWei, 18))}
+                disabled={hasNoBalance || isSameAsset || maxFillWei <= 0n}
                 className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent-teal/40 hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Max
@@ -572,13 +581,13 @@ export function SwapPage() {
               </span>
               <div className="flex items-center gap-3">
                 {!fromToken.isNative && (
-                  <Tooltip content={hasNoBalance ? `No ${fromToken.symbol} balance` : `Max you can swap: ${fmt(parseUnits(maxSwappable.toString(), 18), 18)} ${fromToken.symbol} (min of wallet balance and pool liquidity)`} placement="top" disabled={hasNoBalance}>
+                  <Tooltip content={hasNoBalance ? `No ${fromToken.symbol} balance` : `Max you can swap: ${fmt(maxFillWei, 18)} ${fromToken.symbol} (min of wallet balance and pool liquidity)`} placement="top" disabled={hasNoBalance}>
                     <button
-                      onClick={() => handleFromAmountChange(fmt(parseUnits(maxSwappable.toString(), 18), 18))}
-                      disabled={hasNoBalance || isSameAsset}
+                      onClick={() => handleFromAmountChange(fmt(maxFillWei, 18))}
+                      disabled={hasNoBalance || isSameAsset || maxFillWei <= 0n}
                       className="text-xs font-medium text-accent-teal transition-colors hover:text-accent-green disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Max: {fmt(parseUnits(maxSwappable.toString(), 18), 18)} {fromToken.symbol}
+                      Max: {fmt(maxFillWei, 18)} {fromToken.symbol}
                     </button>
                   </Tooltip>
                 )}

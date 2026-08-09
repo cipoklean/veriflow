@@ -15,7 +15,7 @@ import { useCountUp, useTickingNumber } from '@/lib/motion';
 
 export function DashboardPage() {
   const { tvl, verifiedAssetCount, isLoading } = useProtocolStats();
-  const { pools } = useAllPools();
+  const { pools, isLoading: poolsLoading } = useAllPools();
   const tokens = useSupportedTokens();
 
   // Real Swap events from the first pool (WMON/USDC) — NEVER fabricated.
@@ -36,7 +36,8 @@ export function DashboardPage() {
     });
   }, [events, pools, tokens]);
 
-  // 24h volume from REAL event amounts (USD-ish: testnet tokens ~$1 each).
+  // Volume from REAL event amounts (USD-ish: testnet tokens ~$1 each).
+  // H-4: counts ONE leg per swap (the output leg) — no double counting.
   const volume24h = useMemo(() => {
     if (!events.length || !pools[0]) return 0;
     const m0 = tokenMetaByAddress(tokens, pools[0].token0);
@@ -44,9 +45,7 @@ export function DashboardPage() {
     return events.reduce((acc, ev) => {
       const out0 = m0 ? Number(formatUnits(ev.amount0Out, m0.decimals)) : 0;
       const out1 = m1 ? Number(formatUnits(ev.amount1Out, m1.decimals)) : 0;
-      const in0 = m0 ? Number(formatUnits(ev.amount0In, m0.decimals)) : 0;
-      const in1 = m1 ? Number(formatUnits(ev.amount1In, m1.decimals)) : 0;
-      return acc + out0 + out1 + in0 + in1;
+      return acc + out0 + out1;
     }, 0);
   }, [events, pools, tokens]);
 
@@ -73,7 +72,7 @@ export function DashboardPage() {
       delta: null,
       spark: sparkSeries,
       loading: eventsLoading,
-      tip: 'Total swap volume across all pools in the last 24 hours',
+      tip: 'Swap volume (one leg per swap) from the last 1,000 blocks — ≈ 17 min window, not a true 24h',
     },
     {
       label: 'Verified Trades',
@@ -82,7 +81,7 @@ export function DashboardPage() {
       delta: null,
       spark: undefined,
       loading: eventsLoading,
-      tip: 'Number of compliance-cleared swaps on VeriFlow',
+      tip: 'Compliance-cleared swaps in the last 1,000 blocks (≈ 17 min)',
     },
     {
       label: 'Verified Assets',
@@ -231,7 +230,13 @@ export function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {pools.length === 0 ? (
+              {poolsLoading ? (
+                <tr>
+                  <td colSpan={4} className="py-10 text-center">
+                    <div className="mx-auto h-8 w-full max-w-xs skeleton" />
+                  </td>
+                </tr>
+              ) : pools.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-10 text-center text-text-muted">
                     No pools yet — provide liquidity to get started

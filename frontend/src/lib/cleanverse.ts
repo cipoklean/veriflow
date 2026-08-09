@@ -17,6 +17,8 @@ const API_BASE = '/api/cleanverse';
 
 export interface VerifyResult {
   ok: boolean;
+  already?: boolean;
+  message?: string;
   step?: string;
   error?: string;
   hash?: string;

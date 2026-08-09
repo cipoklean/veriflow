@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatUnits } from 'viem';
+import { formatUnits, type Address } from 'viem';
 import { motion } from 'framer-motion';
 import { ChevronDown, ChevronUp, Loader2, Zap, TrendingUp, DollarSign, Shield, Plus } from 'lucide-react';
 import { cn, formatAddress, formatCurrency } from '@/lib/utils';
 import { fmt } from '@/lib/format';
-import { useAllPools, useSupportedTokens, tokenMetaByAddress } from '@/contracts/useVeriFlow';
+import { useAllPools, useSupportedTokens, usePairSwapEvents, tokenMetaByAddress, type TokenMeta } from '@/contracts/useVeriFlow';
 import { TokenIcon } from '@/components/ui/TokenIcon';
 import { Reveal } from '@/components/ui/Reveal';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -22,11 +22,29 @@ interface Pool {
   token0Decimals: number;
   token1Decimals: number;
   volume24h: number;
-  feeAPR: number;
   tvl: number;
 }
 
-type SortKey = 'token0Symbol' | 'tvl' | 'volume24h' | 'feeAPR';
+type SortKey = 'token0Symbol' | 'tvl' | 'volume24h';
+
+/**
+ * Per-pool 24h Volume from REAL Swap events — the same single-leg sum the
+ * Dashboard uses (H-4: one leg per swap, no double counting). "24h" is the
+ * honest label for the scan window (last ~1,000 blocks, ≈17 min on testnet).
+ */
+function PoolVolume({ address, m0, m1 }: { address: Address; m0?: TokenMeta; m1?: TokenMeta }) {
+  const { events, isLoading } = usePairSwapEvents(address, 50);
+  const vol = useMemo(() => {
+    if (!events.length) return 0;
+    return events.reduce((acc, ev) => {
+      const out0 = m0 ? Number(formatUnits(ev.amount0Out, m0.decimals)) : 0;
+      const out1 = m1 ? Number(formatUnits(ev.amount1Out, m1.decimals)) : 0;
+      return acc + out0 + out1;
+    }, 0);
+  }, [events, m0, m1]);
+  if (isLoading) return <span className="text-text-muted">…</span>;
+  return <>{formatCurrency(vol)}</>;
+}
 
 export function PoolsPage() {
   // FE-02: pools are public chain data — no wallet gate.
@@ -53,8 +71,7 @@ export function PoolsPage() {
       token1Symbol: m1?.symbol ?? p.token1.slice(0, 6),
       token0Decimals: m0?.decimals ?? 18,
       token1Decimals: m1?.decimals ?? 18,
-      volume24h: 0,
-      feeAPR: tvl > 0 ? 12.5 : 0,
+      volume24h: 0, // real per-pool volume rendered live via <PoolVolume/>
       tvl,
     };
   });
@@ -94,7 +111,7 @@ export function PoolsPage() {
     { label: 'Total Pools', value: pools.length, icon: Zap, tone: 'text-accent-teal bg-accent-teal/10' },
     { label: 'Total TVL', value: formatCurrency(pools.reduce((sum, p) => sum + p.tvl, 0)), icon: DollarSign, tone: 'text-accent-green bg-accent-green/10' },
     { label: '24h Volume', value: formatCurrency(pools.reduce((sum, p) => sum + p.volume24h, 0)), icon: TrendingUp, tone: 'text-accent-cyan bg-accent-cyan/10' },
-    { label: 'Avg APR', value: pools.length > 0 ? `${(pools.reduce((sum, p) => sum + p.feeAPR, 0) / pools.length).toFixed(1)}%` : '-', icon: Shield, tone: 'text-accent-teal bg-accent-teal/10' },
+    { label: 'Avg APR', value: '—', icon: Shield, tone: 'text-accent-teal bg-accent-teal/10' },
   ];
 
   // FE-02: pools are public chain data — no connect gate. Actions (Create Pool,
@@ -163,8 +180,8 @@ export function PoolsPage() {
                   <th className="cursor-pointer transition-colors hover:text-text-primary" onClick={() => handleSort('volume24h')}>
                     24h Volume <SortArrow col="volume24h" />
                   </th>
-                  <th className="cursor-pointer transition-colors hover:text-text-primary" onClick={() => handleSort('feeAPR')}>
-                    <Tooltip content="Annualized yield from swap fees on this pool" placement="top">Fee APR</Tooltip> <SortArrow col="feeAPR" />
+                  <th>
+                    <Tooltip content="Fee APR requires an indexer — not available on testnet" placement="top">Fee APR</Tooltip>
                   </th>
                   <th>Reserves</th>
                   <th className="text-right">Actions</th>
@@ -185,8 +202,14 @@ export function PoolsPage() {
                       </div>
                     </td>
                     <td className="font-mono text-text-primary">{formatCurrency(pool.tvl)}</td>
-                    <td className="font-mono text-text-secondary">{formatCurrency(pool.volume24h)}</td>
-                    <td className="font-mono text-accent-green">{pool.feeAPR.toFixed(2)}%</td>
+                    <td className="font-mono text-text-secondary">
+                      <PoolVolume address={pool.address as Address} m0={tokenMetaByAddress(tokens, pool.token0 as Address)} m1={tokenMetaByAddress(tokens, pool.token1 as Address)} />
+                    </td>
+                    <td className="font-mono text-text-muted">
+                      <Tooltip content="Fee APR requires an indexer — not available on testnet" placement="top">
+                        <span className="cursor-help">—</span>
+                      </Tooltip>
+                    </td>
                     <td className="text-sm text-text-muted">
                       {fmt(pool.reserve0, pool.token0Decimals)} {pool.token0Symbol} /{' '}
                       {fmt(pool.reserve1, pool.token1Decimals)} {pool.token1Symbol}

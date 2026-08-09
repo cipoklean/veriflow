@@ -17,7 +17,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createCipheriv, createDecipheriv } from 'crypto';
-import { createPublicClient, createWalletClient, http } from 'viem';
+import { createPublicClient, createWalletClient, http, isAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const BASE = process.env.CLEANVERSE_BASE || 'https://uatapi.cleanverse.com/api/cooperate';
@@ -26,8 +26,6 @@ const API_KEY = process.env.CLEANVERSE_API_KEY;
 const REGISTRAR = process.env.REGISTRAR_PRIVATE_KEY;
 
 export const config = { runtime: 'nodejs', maxDuration: 10 };
-
-const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
 
 function getAddress(req: IncomingMessage): string {
   const u = req.url || '';
@@ -129,7 +127,19 @@ const CVI_ABI = [
     ],
     outputs: [],
   },
+  {
+    type: 'function',
+    name: 'isVerified',
+    stateMutability: 'view',
+    inputs: [{ name: 'wallet', type: 'address' }],
+    outputs: [{ name: '', type: 'bool' }],
+  },
 ] as const;
+
+// M-7: per-address 10-minute cooldown (in-memory Map). Vercel function
+// instances are ephemeral, so this is a best-effort throttle, not a guarantee.
+const COOLDOWN_MS = 10 * 60 * 1000;
+const lastAttempt = new Map<string, number>();
 
 async function registerWalletOnChain(address: string, tier = 1): Promise<{ hash: string; status: string }> {
   const account = privateKeyToAccount(REGISTRAR as `0x${string}`);
@@ -154,10 +164,13 @@ function tierOf(raw: any): number {
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const address = getAddress(req);
-  if (!ADDR_RE.test(address)) {
+  // M-7: strict address validation (viem isAddress — rejects checksum-mismatched
+  // addresses, not just the shape regex).
+  if (!isAddress(address)) {
     sendJson(res, 400, { ok: false, step: 'address', error: 'Invalid wallet address' });
     return;
   }
+  const key = address.toLowerCase();
 
   // Step 0 — env check. Name the missing var.
   const missing = !API_ID ? 'CLEANVERSE_API_ID' : !API_KEY ? 'CLEANVERSE_API_KEY' : !REGISTRAR ? 'REGISTRAR_PRIVATE_KEY' : null;
@@ -166,8 +179,36 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return;
   }
 
+  // M-7: per-address 10-minute cooldown. Already attempted recently → reject
+  // with 429 so the UI can show "try again in a few minutes".
+  const now = Date.now();
+  const last = lastAttempt.get(key);
+  if (last && now - last < COOLDOWN_MS) {
+    const minsLeft = Math.ceil((COOLDOWN_MS - (now - last)) / 60000);
+    sendJson(res, 429, { ok: false, step: 'cooldown', error: `Already attempted recently — try again in ~${minsLeft} min` });
+    return;
+  }
+  lastAttempt.set(key, now);
+
   let rawCleanverseResponse: any = null;
   try {
+    // M-7: pre-check on-chain FIRST — if this wallet is already registered in
+    // the CVI registry, return immediately with NO tx and no A-Pass call.
+    const publicClient = createPublicClient({ chain: monadTestnet, transport: http() });
+    // NOTE: `as unknown as` — viem's readContract params type under TS 6.0.3
+    // requires EIP-7702 `authorizationList`; the const ABI's readonly tuple
+    // shape doesn't overlap, so bridge through unknown. Runtime is unchanged.
+    const already = await publicClient.readContract({
+      address: CVI_REGISTRY,
+      abi: CVI_ABI,
+      functionName: 'isVerified',
+      args: [address as `0x${string}`],
+    } as unknown as Parameters<typeof publicClient.readContract>[0]);
+    if (already) {
+      sendJson(res, 200, { ok: true, already: true, step: 'precheck', message: 'Wallet already verified — no action needed' });
+      return;
+    }
+
     // Step 1 — one encrypted generate_apass call.
     rawCleanverseResponse = await generateApass(address, makeCustomerId());
 

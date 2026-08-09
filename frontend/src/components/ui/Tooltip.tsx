@@ -11,6 +11,7 @@ import {
   useRole,
   useDismiss,
   useInteractions,
+  FloatingPortal,
   safePolygon,
   type Placement,
 } from '@floating-ui/react';
@@ -57,6 +58,7 @@ export function Tooltip({
     open: enabled ? open : false,
     onOpenChange: (next) => setOpen(enabled ? next : false),
     placement,
+    strategy: 'fixed',
     middleware: [offset(8), flip({ fallbackAxisSideDirection: 'start' }), shift({ padding: 8 }), arrow({ element: arrowRef })],
     whileElementsMounted: autoUpdate,
   });
@@ -74,7 +76,10 @@ export function Tooltip({
   });
   const focus = useFocus(context);
   const role = useRole(context, { role: 'tooltip' });
-  const dismiss = useDismiss(context);
+  // ancestorScroll: true — close when a scrollable ancestor scrolls (e.g.
+  // .table-container). L-6: without it, portaled fixed tooltips would stay
+  // pinned to stale coordinates while the table scrolls underneath.
+  const dismiss = useDismiss(context, { ancestorScroll: true });
 
   const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, role, dismiss]);
 
@@ -119,30 +124,32 @@ export function Tooltip({
       </span>
       <AnimatePresence>
         {open && (
-          <motion.div
-            ref={refs.setFloating}
-            style={floatingStyles}
-            initial={{ opacity: 0, scale: 0.95, y: 2 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 2 }}
-            transition={{ duration: 0.12, ease: 'easeOut' }}
-            {...getFloatingProps()}
-            className="z-40 max-w-xs rounded-xl border border-white/12 bg-[#0E1A2B]/95 px-3 py-1.5 text-xs leading-relaxed text-text-primary shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_20px_rgba(45,212,191,0.10)] backdrop-blur-xl"
-            role="tooltip"
-          >
-            {rendered}
-            <div
-              ref={arrowRef}
-              className="absolute h-2 w-2 rotate-45 rounded-[2px] border border-white/12 bg-[#0E1A2B]"
-              style={{
-                left: arrowX != null ? `${arrowX}px` : undefined,
-                top: arrowY != null ? `${arrowY}px` : undefined,
-                right: undefined,
-                bottom: undefined,
-                [staticSide]: '-5px',
-              }}
-            />
-          </motion.div>
+          <FloatingPortal>
+            <motion.div
+              ref={refs.setFloating}
+              style={floatingStyles}
+              initial={{ opacity: 0, scale: 0.95, y: 2 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 2 }}
+              transition={{ duration: 0.12, ease: 'easeOut' }}
+              {...getFloatingProps()}
+              className="z-40 max-w-xs rounded-xl border border-white/12 bg-[#0E1A2B]/95 px-3 py-1.5 text-xs leading-relaxed text-text-primary shadow-[0_12px_40px_rgba(0,0,0,0.55),0_0_20px_rgba(45,212,191,0.10)] backdrop-blur-xl"
+              role="tooltip"
+            >
+              {rendered}
+              <div
+                ref={arrowRef}
+                className="absolute h-2 w-2 rotate-45 rounded-[2px] border border-white/12 bg-[#0E1A2B]"
+                style={{
+                  left: arrowX != null ? `${arrowX}px` : undefined,
+                  top: arrowY != null ? `${arrowY}px` : undefined,
+                  right: undefined,
+                  bottom: undefined,
+                  [staticSide]: '-5px',
+                }}
+              />
+            </motion.div>
+          </FloatingPortal>
         )}
       </AnimatePresence>
     </>
