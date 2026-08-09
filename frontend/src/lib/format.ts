@@ -9,11 +9,18 @@ import { formatUnits, parseUnits } from 'viem';
  */
 
 /** Round to `maxDp` decimals and strip trailing zeros. Never emits raw
- *  18-decimal floats — e.g. fmt(x, 18) => "0.208068", not "0.208068000000000000". */
+ *  18-decimal floats — e.g. fmt(x, 18) => "0.208068", not "0.208068000000000000".
+ *  Dust guard: a nonzero amount that rounds to zero at maxDp renders as
+ *  "<0.000001" (never "0", never scientific notation like "1e-7"). */
 export function fmt(raw: bigint, decimals: number, maxDp = 6): string {
+  if (raw === 0n) return '0';
   const s = formatUnits(raw, decimals);
   const [intPart, frac = ''] = s.split('.');
   const trimmedFrac = frac.slice(0, maxDp).replace(/0+$/, '');
+  if (!trimmedFrac && intPart === '0') {
+    // nonzero dust that rounds to zero at maxDp → honest "<0.000001"
+    return `<0.${'0'.repeat(maxDp - 1)}1`;
+  }
   return trimmedFrac ? `${intPart}.${trimmedFrac}` : intPart;
 }
 

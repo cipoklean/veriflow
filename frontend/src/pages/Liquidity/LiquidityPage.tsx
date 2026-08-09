@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAccount, useConfig, useReadContract, useWaitForTransactionReceipt, useChainId, useBalance, useWriteContract, usePublicClient } from 'wagmi';
 import { readContract, writeContract as writeContractAction } from 'wagmi/actions';
-import { parseUnits, erc20Abi, type Address } from 'viem';
+import { erc20Abi, type Address } from 'viem';
 import { Zap, Minus, Shield, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, Wallet, ArrowRightLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
 import { fmt, pctOfBalance, pairAmount, minAmount } from '@/lib/format';
+import { safeParseUnits } from '@/lib/safe';
 import { getContractAddresses } from '@/contracts/config';
 import { useSupportedTokens, decodeRevertReason } from '@/contracts/useVeriFlow';
 import VeriRouterAbi from '@/contracts/abis/VeriRouter.json';
@@ -243,10 +244,10 @@ export function LiquidityPage() {
   useEffect(() => {
     if (!poolInfo) return;
     if (amountA && parseFloat(amountA) > 0) {
-      const aWei = parseUnits(amountA, tokenA.decimals);
+      const aWei = safeParseUnits(amountA, tokenA.decimals);
       setAmountB(fmt(pairAmount(aWei, poolInfo.reserve0, poolInfo.reserve1), tokenB.decimals));
     } else if (amountB && parseFloat(amountB) > 0) {
-      const bWei = parseUnits(amountB, tokenB.decimals);
+      const bWei = safeParseUnits(amountB, tokenB.decimals);
       setAmountA(fmt(pairAmount(bWei, poolInfo.reserve1, poolInfo.reserve0), tokenA.decimals));
     }
   }, [amountA, amountB, poolInfo, tokenA.decimals, tokenB.decimals]);
@@ -332,8 +333,8 @@ export function LiquidityPage() {
 
     try {
       setIsLoading(true);
-      const amountADesired = parseUnits(amountA, tokenA.decimals);
-      const amountBDesired = parseUnits(amountB, tokenB.decimals);
+      const amountADesired = safeParseUnits(amountA, tokenA.decimals);
+      const amountBDesired = safeParseUnits(amountB, tokenB.decimals);
       const minAmountA = (amountADesired * BigInt(Math.floor((100 - slippage) * 100))) / BigInt(10000);
       const minAmountB = (amountBDesired * BigInt(Math.floor((100 - slippage) * 100))) / BigInt(10000);
 
@@ -440,7 +441,7 @@ export function LiquidityPage() {
 
     try {
       setIsLoading(true);
-      const liquidity = parseUnits(amountA, 18); // LP tokens have 18 decimals
+      const liquidity = safeParseUnits(amountA, 18); // LP tokens have 18 decimals
       // Slippage-protected minima from the user's LP share of reserves.
       const share = poolInfo.totalSupply > 0n ? (liquidity * BigInt(1e18)) / poolInfo.totalSupply : 0n;
       const estA = poolInfo.totalSupply > 0n ? (poolInfo.reserve0 * share) / BigInt(1e18) : 0n;
@@ -840,12 +841,12 @@ export function LiquidityPage() {
           <div className="font-mono text-sm text-text-secondary">
             {activeTab === 'add' ? (
               <>
-                Min A: {amountA ? fmt(minAmount(parseUnits(amountA, tokenA.decimals), slippage), tokenA.decimals) : '-'} {tokenA.symbol}
+                Min A: {amountA ? fmt(minAmount(safeParseUnits(amountA, tokenA.decimals), slippage), tokenA.decimals) : '-'} {tokenA.symbol}
                 {'  ·  '}
-                Min B: {amountB ? fmt(minAmount(parseUnits(amountB, tokenB.decimals), slippage), tokenB.decimals) : '-'} {tokenB.symbol}
+                Min B: {amountB ? fmt(minAmount(safeParseUnits(amountB, tokenB.decimals), slippage), tokenB.decimals) : '-'} {tokenB.symbol}
               </>
             ) : (
-              <>Min A: {amountA ? fmt(minAmount(parseUnits(amountA, 18), slippage), 18) : '-'} LP</>
+              <>Min A: {amountA ? fmt(minAmount(safeParseUnits(amountA, 18), slippage), 18) : '-'} LP</>
             )}
           </div>
         </div>

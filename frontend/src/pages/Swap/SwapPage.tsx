@@ -3,10 +3,11 @@ import { motion } from 'framer-motion';
 import { useAccount, useChainId, useReadContract, useWaitForTransactionReceipt, useConfig, useBalance, useWriteContract, usePublicClient } from 'wagmi';
 import { useNavigate } from 'react-router-dom';
 import { readContract, writeContract as writeContractAction } from 'wagmi/actions';
-import { parseUnits, formatUnits, erc20Abi, type Address } from 'viem';
+import { formatUnits, erc20Abi, type Address } from 'viem';
 import { ArrowRightLeft, AlertTriangle, CheckCircle2, Loader2, Settings2, ChevronDown, Info, ShieldCheck, Fingerprint, BadgeCheck, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmt, pctOfBalance } from '@/lib/format';
+import { safeParseUnits } from '@/lib/safe';
 import { useGasCappedWrite } from '@/hooks/useGasCappedWrite';
 import { withGasCap } from '@/lib/utils';
 import { useToast } from '@/hooks/useToast';
@@ -119,7 +120,7 @@ export function SwapPage() {
   // Native MON (0x0) must be resolved to the canonical WMON address in the path.
   const path: Address[] = resolveSwapPath(fromToken.address, toToken.address, contractAddresses.weth);
   const amountInWei = fromAmount && parseFloat(fromAmount) > 0
-    ? parseUnits(fromAmount, fromToken.decimals)
+    ? safeParseUnits(fromAmount, fromToken.decimals)
     : 0n;
   const { amountOut, noLiquidity } = useQuote(path, amountInWei);
 
@@ -202,10 +203,16 @@ export function SwapPage() {
         setToAmount(value);
         return;
       }
-      const amountIn = parseUnits(value, fromToken.decimals);
-      const ratio = Number(quote.amountOut) / Number(amountIn);
-      const out = BigInt(Math.floor(Number(amountIn) * ratio));
-      setToAmount(formatUnits(out, toToken.decimals));
+      // FLOAT-RATIO FIX: scale the quote proportionally in bigint bps —
+      // out = quote.amountOut * amountIn / quoteAmountIn (all bigint, guarded).
+      // NEVER Number(quote.amountOut)/Number(amountIn) → BigInt(Math.floor(...)).
+      const amountIn = safeParseUnits(value, fromToken.decimals);
+      const quoteIn = safeParseUnits(fromAmount, fromToken.decimals);
+      const out =
+        amountIn > 0n && quoteIn > 0n
+          ? (quote.amountOut * amountIn) / quoteIn
+          : quote.amountOut;
+      setToAmount(fmt(out, toToken.decimals));
     }
   };
 
@@ -245,7 +252,7 @@ export function SwapPage() {
 
     try {
       setIsLoading(true);
-      const amountIn = parseUnits(fromAmount, fromToken.decimals);
+      const amountIn = safeParseUnits(fromAmount, fromToken.decimals);
       // FE-21: gas-capped approve.
       const capped = publicClient
         ? await withGasCap(publicClient as never, {
@@ -293,7 +300,7 @@ export function SwapPage() {
 
     try {
       setIsLoading(true);
-      const amountIn = parseUnits(fromAmount, fromToken.decimals);
+      const amountIn = safeParseUnits(fromAmount, fromToken.decimals);
       const minAmountOut = (quote.amountOut * BigInt(Math.floor((100 - slippage) * 100))) / BigInt(10000);
 
       // NEW-07: for ERC20 inputs, check the LIVE allowance (never the possibly
@@ -465,13 +472,16 @@ export function SwapPage() {
   const maxSwappable = Math.min(walletBalanceNum, liquidityCapNum);
 
   // Raw wallet balance (bigint) for bigint chip math (no float artifacts).
-  const walletBalanceWei = parseUnits(
+  // WHITE-SCREEN FIX: walletBalanceNum.toString() can emit scientific notation
+  // ("9.17602280404e-7") for dust balances — viem's parseUnits throws on that.
+  // safeParseUnits returns 0n instead of crashing the whole app.
+  const walletBalanceWei = safeParseUnits(
     fromToken.isNative ? walletBalanceNum.toString() : fromBalanceFormatted || '0',
     18,
   );
   // Pool-capped max in wei: min(wallet, pool liquidity) — the SAME value the
   // small "Max:" line uses. Chips + Max all fill min(share, this).
-  const poolCapWei = parseUnits(maxSwappable.toString(), 18);
+  const poolCapWei = safeParseUnits(maxSwappable.toString(), 18);
   // MAX fill value: pool-capped, with the 0.01 native gas buffer applied first.
   const maxFillWei =
     pctOfBalance(walletBalanceWei, 100, fromToken.isNative) < poolCapWei
@@ -482,7 +492,7 @@ export function SwapPage() {
   const amountInNum = fromAmount ? safeBalance(fromAmount) : 0;
   const insufficientBalance = amountInNum > walletBalanceNum + 1e-9 && !isSameAsset;
   const awaitingApproval = approvalStep !== null;
-  const needsApproval = !fromToken.isNative && allowance && quote && parseUnits(fromAmount, fromToken.decimals) > allowance;
+  const needsApproval = !fromToken.isNative && allowance && quote && safeParseUnits(fromAmount, fromToken.decimals) > allowance;
   const complianceBlocked = isConnected && !isVerified;
 
   // EDGE CASE: unverified wallet cannot swap (compliance hook reverts). Surface
@@ -673,22 +683,34 @@ export function SwapPage() {
                     {isSameAsset
                       ? `1 ${fromToken.symbol} = 1 ${toToken.symbol}`
                       : (() => {
-                          // RATE BUGFIX: divide FORMATTED units (out in toToken
-                          // decimals / in in fromToken decimals), never raw bigint
-                          // units (6-dec / 18-dec = 1.5e-11 scientific notation).
-                          const inFmt = Number(formatUnits(amountInWei, fromToken.decimals));
-                          const outFmt = Number(formatUnits(amountOut, toToken.decimals));
-                          const rate = inFmt > 0 ? outFmt / inFmt : 0;
-                          return `1 ${fromToken.symbol} ≈ ${rate.toFixed(6)} ${toToken.symbol}`;
+                          // RATE FIX: bigint bps with decimal normalization —
+                          // rateBps = out * 10^fromDec * 10000 / (in * 10^toDec),
+                          // so 18-dec WMON vs 6-dec USDC never mixes raw units.
+                          // Display via fmt() on bigint; NEVER Number(a)/Number(b)
+                          // → String/BigInt (scientific → viem throws).
+                          const rateBps =
+                            amountInWei > 0n
+                              ? (amountOut *
+                                  10n ** BigInt(fromToken.decimals) *
+                                  10000n) /
+                                (amountInWei * 10n ** BigInt(toToken.decimals))
+                              : 0n;
+                          const rate = fmt(rateBps, 4);
+                          return `1 ${fromToken.symbol} ≈ ${rate} ${toToken.symbol}`;
                         })()}
                   </div>
                   {/* Pool price (spot): pre-impact mid from formatted reserves */}
                   {poolReserves && poolReserves.reserveIn > 0n && !isSameAsset && (
                     <div className="mt-0.5 text-xs text-text-muted">
-                      Pool price (spot): {(
-                        Number(formatUnits(poolReserves.reserveOut, toToken.decimals)) /
-                        Number(formatUnits(poolReserves.reserveIn, fromToken.decimals))
-                      ).toFixed(4)} {toToken.symbol} per {fromToken.symbol}
+                      Pool price (spot): {(() => {
+                        // bigint bps with decimal normalization (same as rate).
+                        const spotBps =
+                          (poolReserves.reserveOut *
+                            10n ** BigInt(fromToken.decimals) *
+                            10000n) /
+                          (poolReserves.reserveIn * 10n ** BigInt(toToken.decimals));
+                        return fmt(spotBps, 4);
+                      })()} {toToken.symbol} per {fromToken.symbol}
                     </div>
                   )}
                 </div>
