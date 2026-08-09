@@ -179,21 +179,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return;
   }
 
-  // M-7: per-address 10-minute cooldown. Already attempted recently → reject
-  // with 429 so the UI can show "try again in a few minutes".
-  const now = Date.now();
-  const last = lastAttempt.get(key);
-  if (last && now - last < COOLDOWN_MS) {
-    const minsLeft = Math.ceil((COOLDOWN_MS - (now - last)) / 60000);
-    sendJson(res, 429, { ok: false, step: 'cooldown', error: `Already attempted recently — try again in ~${minsLeft} min` });
-    return;
-  }
-  lastAttempt.set(key, now);
-
-  let rawCleanverseResponse: any = null;
+  // M-7: pre-check on-chain FIRST — if this wallet is already registered in
+  // the CVI registry, return immediately with NO tx and no A-Pass call. Runs
+  // BEFORE the cooldown so a verified wallet always short-circuits cleanly.
   try {
-    // M-7: pre-check on-chain FIRST — if this wallet is already registered in
-    // the CVI registry, return immediately with NO tx and no A-Pass call.
     const publicClient = createPublicClient({ chain: monadTestnet, transport: http() });
     // NOTE: `as unknown as` — viem's readContract params type under TS 6.0.3
     // requires EIP-7702 `authorizationList`; the const ABI's readonly tuple
@@ -208,7 +197,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       sendJson(res, 200, { ok: true, already: true, step: 'precheck', message: 'Wallet already verified — no action needed' });
       return;
     }
+  } catch {
+    // RPC flake on the pre-check — fall through to the registration path; the
+    // on-chain write itself will surface the real state.
+  }
 
+  // M-7: per-address 10-minute cooldown. Only throttles the EXPENSIVE path
+  // (A-Pass + registration tx) — verified wallets short-circuited above.
+  const now = Date.now();
+  const last = lastAttempt.get(key);
+  if (last && now - last < COOLDOWN_MS) {
+    const minsLeft = Math.ceil((COOLDOWN_MS - (now - last)) / 60000);
+    sendJson(res, 429, { ok: false, step: 'cooldown', error: `Already attempted recently — try again in ~${minsLeft} min` });
+    return;
+  }
+  lastAttempt.set(key, now);
+
+  let rawCleanverseResponse: any = null;
+  try {
     // Step 1 — one encrypted generate_apass call.
     rawCleanverseResponse = await generateApass(address, makeCustomerId());
 

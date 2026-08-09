@@ -799,3 +799,19 @@
     animation: pulseDot 2s ease-in-out infinite;
   }
 }
+
+/* append to index.css — visuals ONLY, no position/top/left/margin */
+.vf-tooltip {
+  max-width: 18rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(14, 26, 43, 0.97);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.45;
+  color: #cbd5e1;
+  cursor: default;
+}
+.vf-tooltip[role="tooltip"] { cursor: default; }
