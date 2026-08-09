@@ -113,13 +113,19 @@ export function SettingsPage() {
           return;
         }
         if (msg.hash) setCcStep('On-chain confirmation…');
-        if (msg.step === 'done' || msg.ok) {
+        if (msg.step === 'done' || msg.step === 'done-via-query' || msg.ok) {
           setCcDone(true);
           setCcBusy(false);
           refetchVerified();
           window.clearInterval(poll);
         } else {
-          setCcError(msg.error || 'Verification failed');
+          // retryable (sandbox busy) → friendly copy; the ActionButton shows
+          // an inline Retry that re-runs handleVerifyCleanverse.
+          setCcError(
+            msg.retryable
+              ? msg.error || 'Cleanverse sandbox is busy — try again in a minute.'
+              : msg.error || 'Verification failed',
+          );
           setCcBusy(false);
           window.clearInterval(poll);
         }

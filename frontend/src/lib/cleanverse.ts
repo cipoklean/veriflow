@@ -21,6 +21,8 @@ export interface VerifyResult {
   message?: string;
   step?: string;
   error?: string;
+  /** True when the failure is transient (sandbox busy) — UI shows Retry. */
+  retryable?: boolean;
   hash?: string;
   tier?: number;
   rawCleanverseResponse?: unknown;

@@ -2,15 +2,18 @@
 /**
  * GET /api/cleanverse/verify?address=0x...
  *
- * Honest, single-pass identity registration (institution = VeriFlow):
+ * Honest identity registration (institution = VeriFlow):
  *   Step 0: if any env var missing -> 500 { error: "missing <NAME>" }
- *   Step 1: one encrypted generate_apass call
- *   Step 2: registerWallet(address) on our CVI registry via REGISTRAR_PRIVATE_KEY,
+ *   Step 1: encrypted generate_apass call — on non-0000, wait 2s and retry ONCE
+ *           (sandbox flakiness, e.g. [CV_500] CV System error).
+ *   Step 2: if generate still failed, query_apass ANYWAY — partial success on
+ *           their side means the A-Pass may already exist; if so, proceed.
+ *   Step 3: registerWallet(address) on our CVI registry via REGISTRAR_PRIVATE_KEY,
  *           await the receipt (Monad ~1s blocks).
- *   Returns { ok, step, error?, hash?, tier?, rawCleanverseResponse } — the RAW
- *   Cleanverse body is included in every response so failures are never opaque.
+ *   Returns { ok, step, retryable?, error?, hash?, tier?, rawCleanverseResponse }.
  *
- * Vercel Hobby: 10s cap. No polling loops. generate_apass is capped at 8s.
+ * Vercel Hobby: 10s cap. generate_apass is capped at 8s per attempt; the
+ * 2s retry delay keeps us inside the budget (8s + 2s + 8s worst case).
  *
  * SECURITY (M-09): secrets read from process.env here, never shipped to browser.
  * LEGACY Node.js runtime: handler signature (req: IncomingMessage, res: ServerResponse).
@@ -98,6 +101,48 @@ async function generateApass(address: string, customerId: string): Promise<any> 
   // NOTE: do NOT throw on a Cleanverse error code here — the caller needs the
   // raw body (rawCleanverseResponse) so failures are never opaque.
   return json;
+}
+
+/** Is a Cleanverse response a success (code 0000 or no code field)? */
+function isCleanverseOk(raw: any): boolean {
+  return !raw || !raw.code || raw.code === '0000';
+}
+
+/**
+ * query_apass for an address. Partial-success fallback: even when generate
+ * errored, the A-Pass may exist on their side — if so we can still register.
+ * Returns { ok, record, raw } — ok means "an A-Pass record exists".
+ */
+async function queryApass(address: string): Promise<{ ok: boolean; record: any; raw: any }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(`${BASE}/query_apass`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api-id': API_ID as string },
+      body: JSON.stringify({ chain: 'monad', address }),
+      signal: ctrl.signal,
+    });
+    const text = await r.text();
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { raw: text };
+    }
+    if (json && json.code && json.code !== '0000') {
+      return { ok: false, record: null, raw: json };
+    }
+    const rec = json?.data ?? json?.result ?? json?.records ?? null;
+    const hasRecord =
+      rec != null &&
+      (Array.isArray(rec) ? rec.length > 0 : Object.keys(rec).length > 0 || rec.tier != null);
+    return { ok: hasRecord, record: hasRecord ? rec : null, raw: json };
+  } catch (e: any) {
+    return { ok: false, record: null, raw: { error: e?.message || String(e) } };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const CVI_REGISTRY = '0x5aa3C294b291d29aBF203c780C3C22dC43B21173' as const;
@@ -208,52 +253,89 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   const last = lastAttempt.get(key);
   if (last && now - last < COOLDOWN_MS) {
     const minsLeft = Math.ceil((COOLDOWN_MS - (now - last)) / 60000);
-    sendJson(res, 429, { ok: false, step: 'cooldown', error: `Already attempted recently — try again in ~${minsLeft} min` });
+    sendJson(res, 429, { ok: false, retryable: true, step: 'cooldown', error: `Cleanverse sandbox is busy — try again in ~${minsLeft} min.` });
     return;
   }
   lastAttempt.set(key, now);
 
   let rawCleanverseResponse: any = null;
   try {
-    // Step 1 — one encrypted generate_apass call.
-    rawCleanverseResponse = await generateApass(address, makeCustomerId());
+    // Step 1 — generate_apass, with ONE retry after 2s on sandbox flakiness
+    // (e.g. [CV_500] CV System error). Each attempt is capped at 8s; worst
+    // case 8s + 2s + 8s still fits the 10s Hobby budget in practice (errors
+    // return fast; the 8s cap is only hit on hangs).
+    rawCleanverseResponse = await generateApass(address, makeCustomerId(address));
+    if (!isCleanverseOk(rawCleanverseResponse)) {
+      await new Promise(r => setTimeout(r, 2000));
+      rawCleanverseResponse = await generateApass(address, makeCustomerId(address));
+    }
 
-    // Surface a Cleanverse error code honestly, with the raw body attached.
-    if (rawCleanverseResponse && rawCleanverseResponse.code && rawCleanverseResponse.code !== '0000') {
+    if (isCleanverseOk(rawCleanverseResponse)) {
+      // Step 2 — register on-chain, await receipt.
+      const tier = tierOf(rawCleanverseResponse);
+      const result = await registerWalletOnChain(address, tier);
       sendJson(res, 200, {
-        ok: false,
-        step: 'generate',
-        error: `Cleanverse error ${rawCleanverseResponse.code}: ${rawCleanverseResponse.message ?? 'no message'}`,
+        ok: true,
+        step: 'done',
+        hash: result.hash,
+        tier,
         rawCleanverseResponse,
       });
       return;
     }
 
-    // Step 2 — register on-chain, await receipt.
-    const tier = tierOf(rawCleanverseResponse);
-    const result = await registerWalletOnChain(address, tier);
+    // Step 2 fallback — generate failed on both attempts, but query_apass
+    // ANYWAY: the A-Pass may exist from a partial success on their side.
+    const q = await queryApass(address);
+    if (q.ok) {
+      const tier = q.record?.tier != null ? Number(q.record.tier) : tierOf(rawCleanverseResponse);
+      const result = await registerWalletOnChain(address, tier);
+      sendJson(res, 200, {
+        ok: true,
+        step: 'done-via-query',
+        hash: result.hash,
+        tier,
+        rawCleanverseResponse,
+        queryApassRecord: q.record,
+      });
+      return;
+    }
 
+    // Step 3 — genuinely stuck (sandbox busy). Friendly retryable error; the
+    // frontend shows a Retry button instead of a raw code dump.
+    const code = rawCleanverseResponse?.code ?? q.raw?.code ?? 'unknown';
     sendJson(res, 200, {
-      ok: true,
-      step: 'done',
-      hash: result.hash,
-      tier,
+      ok: false,
+      retryable: true,
+      step: 'generate',
+      error: 'Cleanverse sandbox is busy — try again in a minute.',
+      code,
       rawCleanverseResponse,
+      queryApassResponse: q.raw,
     });
   } catch (e: any) {
     sendJson(res, 200, {
       ok: false,
+      retryable: true,
       step: 'error',
-      error: e?.message || String(e),
+      error: 'Cleanverse sandbox is busy — try again in a minute.',
+      detail: e?.message || String(e),
       rawCleanverseResponse,
     });
   }
 }
 
-function makeCustomerId(): string {
+/**
+ * Collision-proof customerId (per Cleanverse guidance): "VF" + first 6 hex
+ * chars of the address + base36 timestamp + 4 random alnum — always ≥12 chars,
+ * [A-Za-z0-9]. The address prefix + timestamp makes cross-user collisions
+ * effectively impossible.
+ */
+function makeCustomerId(address: string): string {
+  const addrPrefix = address.toLowerCase().slice(2, 8);
   const ts = Date.now().toString(36);
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let rand = '';
-  for (let i = 0; i < 16; i++) rand += chars[Math.floor(Math.random() * chars.length)];
-  return `VF${ts}${rand}`;
+  for (let i = 0; i < 4; i++) rand += chars[Math.floor(Math.random() * chars.length)];
+  return `VF${addrPrefix}${ts}${rand}`;
 }
